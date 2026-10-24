@@ -70,7 +70,7 @@ def test_spelling_suggestion_is_conservative():
 
 
 def test_public_target_validation():
-    assert main._public_target("example.com") == ("example.com", "domain")
+    assert main._public_target("openai.com") == ("openai.com", "domain")
     assert main._public_target("8.8.8.8") == ("8.8.8.8", "ip")
     try:
         main._public_target("127.0.0.1")
