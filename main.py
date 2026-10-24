@@ -106,7 +106,7 @@ def _normalize_result(item: dict[str, Any], category: str) -> dict[str, str] | N
         item.get("thumbnail") or item.get("image") or item.get("thumbnail_url")
         or nested.get("medium") or nested.get("small")
     ) if category in {"images", "videos"} else None
-    source = _clean_text(item.get("source") or item.get("publisher") or item.get("provider"), 150)
+    source = _clean_text(item.get("source") or item.get("publisher") or item.get("provider") or item.get("engine"), 150)
     if not source:
         source = (urlparse(href).hostname or "").removeprefix("www.")
     result = {
