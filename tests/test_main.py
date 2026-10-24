@@ -61,3 +61,35 @@ def test_provider_error_is_sanitized():
         response = client.get("/api/search", params={"q": "test"})
     assert response.status_code == 503
     assert "private details" not in response.text
+
+
+
+def test_spelling_suggestion_is_conservative():
+    assert main._spell_correction("restarant") == "restaurant"
+    assert main._spell_correction("OpenFind OSINT") is None
+
+
+def test_public_target_validation():
+    assert main._public_target("example.com") == ("example.com", "domain")
+    assert main._public_target("8.8.8.8") == ("8.8.8.8", "ip")
+    try:
+        main._public_target("127.0.0.1")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("private IP must be rejected")
+
+
+def test_osint_rejects_local_targets():
+    response = client.get("/api/osint", params={"target": "127.0.0.1"})
+    assert response.status_code == 422
+
+
+def test_searxng_result_normalization():
+    result = main._normalize_result(
+        {"title": "Example", "url": "https://example.org/", "content": "Public result", "engine": "test"},
+        "web",
+    )
+    assert result is not None
+    assert result["source"] == "test"
+    assert result["snippet"] == "Public result"

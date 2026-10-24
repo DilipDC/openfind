@@ -90,3 +90,14 @@ DDGS is third-party software and provider access can break or be rate-limited. R
 ## License
 
 MIT. See LICENSE.
+
+
+## OpenFind 1.1 additions
+
+- Spelling suggestions powered by the MIT-licensed pyspellchecker project: https://github.com/barrust/pyspellchecker. Corrections are suggestions; searches are not silently rewritten.
+- Passive OSINT for public domains and global IP addresses: public DNS A/AAAA/MX/NS records, RDAP registration data where available, and links to VirusTotal, urlscan.io, and Certificate Transparency. It does not scan ports or attempt access.
+- Separate public onion-index search via Ahmia: https://ahmia.fi/about/. The Onion index button opens Ahmia in a separate tab; this app does not run Tor, crawl onion sites, or guarantee indexed links are safe.
+- 20 results per page, up to 25 pages.
+- Optional SearXNG integration: set the SEARXNG_URL environment variable to an instance you operate or trust. It uses the instance JSON search API; if unavailable or disabled, search falls back to DDGS. Many SearXNG instances disable JSON by default. Docs: https://docs.searxng.org/dev/search_api.html
+
+Open-source components reused: DDGS (https://github.com/deedy5/ddgs), pyspellchecker (https://github.com/barrust/pyspellchecker), and the SearXNG HTTP API. OpenFind integrates their published library/API; it does not copy their code.
