@@ -114,3 +114,19 @@ Open the /video page from the OpenFind navigation to scan a public webpage for d
 - Server-side scanning validates public DNS/IP addresses and re-validates every redirect. Public services should still use rate limits and abuse monitoring before scaling.
 
 The Video Scout is part of OpenFind and deploys with the existing Render web service when updates to main are pushed.
+
+
+## Video extraction algorithm
+
+The Video Scout uses an ordered, bounded Python extraction pipeline instead of guessing stream URLs in the browser:
+
+1. **Validate** the URL: HTTP/HTTPS only, public DNS/IP destinations only, standard ports only; reject local/private addresses and re-check every fetched redirect.
+2. **Direct-media fast path**: if the URL points to a recognized video/container extension, return the direct URL without invoking a site extractor.
+3. **Host-specific resolver**: route public TeraBox shares to the dedicated share resolver.
+4. **Primary extraction**: use the maintained yt-dlp extractor catalogue to inspect supported public video pages and choose the site's actual media formats. Keep short-lived CDN URLs out of browser metadata.
+5. **Secondary extraction**: if yt-dlp fails, try gallery-dl only for the explicitly supported social hosts.
+6. **Download**: use the same validated original page URL so yt-dlp can select formats and merge audio/video with FFmpeg where needed; direct media links redirect to their public file.
+7. **Fail safely**: return a bounded, sanitized error for login walls, automated-traffic blocks, unsupported hosts, or unavailable FFmpeg. Do not bypass DRM, authentication, or private access controls.
+8. **Regression tests**: `tests/test_main.py` and `tests/test_video_algorithm.py` cover URL validation, the direct-media path, extractor ordering, metadata handling, fallback behavior, and invalid media responses. Run `pytest -q` locally; GitHub Actions runs the suite on pushes and pull requests.
+
+The algorithm can only extract content that the selected host and extractor make accessible to the server. YouTube and social platforms may block cloud-hosted requests or require authorized cookies; no extractor can guarantee every URL will work.
