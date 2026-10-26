@@ -1,58 +1,22 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#080d16">
-<title>Video Scout — OpenFind</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f6f7f9"><title>OpenFind Video</title>
 <style>
-:root{color-scheme:dark;--bg:#080d16;--card:#111a29;--line:#29374c;--text:#eef4ff;--muted:#9aa9bf;--accent:#62e6d0;--blue:#84aaff;--warn:#ffd078}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(800px 400px at 50% -180px,#1d3150,transparent 75%),var(--bg);color:var(--text);font:15px/1.55 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}
-.shell{width:min(720px,calc(100% - 32px));margin:auto}header{height:70px;border-bottom:1px solid #ffffff12}.nav{height:100%;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:800;letter-spacing:-.03em}.logo{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--blue));color:#07111a}.brand small{display:block;font-size:10px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase}.back{color:#c4d1e4;text-decoration:none;border:1px solid var(--line);padding:8px 11px;border-radius:10px;font-size:12px}
-main{padding:76px 0 44px}.hero{text-align:center;margin-bottom:30px}.eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:800}.hero h1{font-size:clamp(36px,7vw,54px);letter-spacing:-.055em;line-height:1.08;margin:14px 0}.hero p{max-width:520px;margin:auto;color:var(--muted);line-height:1.8}
-.inputbox{padding:8px;display:flex;gap:8px;border:1px solid #3a4c65;background:#0b121e;border-radius:15px;box-shadow:0 20px 65px #0005}.inputbox span{padding:12px 7px 12px 12px;color:var(--accent);font-size:19px}input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:14px}input::placeholder{color:#74849c}.hint{text-align:center;color:#7f90aa;font-size:11px;margin:12px 0 25px}
-.card{border:1px solid var(--line);background:#0e1623;border-radius:17px;overflow:hidden;display:none}.status{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line);font-size:13px}.spinner{width:16px;height:16px;border:2px solid #31445b;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;display:none}.busy .spinner{display:block}.status strong{font-weight:750}.status small{margin-left:auto;color:var(--muted);font-size:11px}
-@keyframes spin{to{transform:rotate(360deg)}}.content{padding:16px}.preview{width:100%;max-height:390px;aspect-ratio:16/9;object-fit:contain;background:#03060b;border-radius:11px;display:block}.title{font-size:18px;line-height:1.4;margin:16px 0 6px;overflow-wrap:anywhere}.source{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.details{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:17px 0}.detail{padding:11px;background:#131e2e;border:1px solid #28374d;border-radius:10px;min-width:0}.detail span{display:block;color:var(--muted);font-size:10px;margin-bottom:4px}.detail b{font-size:12px;overflow-wrap:anywhere}.download{display:flex;justify-content:center;align-items:center;width:100%;padding:13px;border-radius:10px;background:var(--accent);color:#06121a;text-decoration:none;font-weight:850;font-size:13px}.note{color:var(--muted);font-size:11px;line-height:1.7;margin:13px 2px 2px}.error{color:var(--warn);padding:22px 18px;font-size:13px;line-height:1.7}footer{text-align:center;color:#71829a;font-size:11px;line-height:1.8;margin-top:28px}footer a{color:#afc4e5}
-@media(max-width:520px){main{padding-top:55px}.shell{width:calc(100% - 24px)}.details{grid-template-columns:1fr 1fr}.details .detail:last-child{grid-column:span 2}.hero p{font-size:14px}.back{font-size:11px;padding:7px 9px}}
-@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
-</style>
-</head>
-<body>
-<header><div class="shell nav"><a class="brand" href="/"><span class="logo">▶</span><span>OpenFind<small>Video Scout</small></span></a><a class="back" href="/">← Search</a></div></header>
-<main class="shell">
-<section class="hero"><div class="eyebrow">One link · One video</div><h1>Get the video.<br><span style="color:var(--accent)">Nothing extra.</span></h1><p>Paste a public video page link. OpenFind will try to identify the main video and show its available format and size.</p></section>
-<form id="form"><div class="inputbox"><span>↗</span><input id="url" type="url" autocomplete="url" spellcheck="false" placeholder="Paste a YouTube, Instagram, X or video URL…" aria-label="Video page URL" required></div></form>
-<div class="hint">Paste a link to start automatically · Press Enter if needed</div>
-<section id="card" class="card" aria-live="polite"><div class="status" id="status"><div class="spinner"></div><strong id="statusText">Preparing video</strong><small id="statusSmall"></small></div><div id="content" class="content"></div></section>
-<footer>Only public videos that the source makes accessible can be resolved. Login-only, private, DRM-protected or blocked videos may not work. Respect the source website's rules and the creator's rights.<br><a href="https://github.com/DilipDC/openfind" target="_blank" rel="noopener noreferrer">Open-source project</a></footer>
-</main>
+*{box-sizing:border-box}body{margin:0;background:#f6f7f9;color:#17191e;font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}.shell{width:min(650px,calc(100% - 30px));margin:auto}header{height:66px;border-bottom:1px solid #e5e7eb;background:#fff}.nav{height:100%;display:flex;align-items:center;justify-content:space-between}.brand{font-weight:800;letter-spacing:-.04em;text-decoration:none;color:#17191e;display:flex;align-items:center;gap:9px}.mark{display:grid;place-items:center;width:31px;height:31px;background:#17191e;color:#fff;border-radius:9px;font-size:14px}.back{color:#525866;text-decoration:none;font-size:12px}main{padding:74px 0 45px}.hero{text-align:center;margin-bottom:28px}.hero h1{font-size:clamp(32px,7vw,46px);letter-spacing:-.055em;line-height:1.08;margin:0 0 10px}.hero p{margin:0;color:#777f8c;font-size:14px}.inputbox{display:flex;gap:8px;background:#fff;border:1px solid #d8dce3;border-radius:13px;padding:6px;box-shadow:0 5px 20px #10182808}.inputbox:focus-within{border-color:#828b9b;box-shadow:0 0 0 3px #17191e0b}input{min-width:0;flex:1;padding:12px 10px;border:0;outline:0;background:transparent;color:#17191e;font:inherit;font-size:14px}input::placeholder{color:#9aa1ad}.status{display:none;align-items:center;gap:10px;margin:18px 2px;color:#69717e;font-size:12px}.spinner{width:14px;height:14px;border:2px solid #d9dde4;border-top-color:#17191e;border-radius:50%;animation:spin .7s linear infinite}.busy .spinner{display:block}@keyframes spin{to{transform:rotate(360deg)}}.card{display:none;margin-top:18px;border:1px solid #e1e4e9;background:#fff;border-radius:15px;overflow:hidden}.preview{width:100%;max-height:380px;aspect-ratio:16/9;object-fit:contain;background:#111;display:block}.body{padding:18px}.title{font-size:17px;font-weight:750;line-height:1.4;overflow-wrap:anywhere;margin:0 0 5px}.source{font-size:11px;color:#8b929e;overflow-wrap:anywhere}.facts{display:flex;gap:24px;margin:18px 0}.fact span{display:block;font-size:10px;color:#8b929e;margin-bottom:3px}.fact b{font-size:13px;font-weight:700}.download{display:block;text-align:center;text-decoration:none;background:#17191e;color:#fff;padding:12px;border-radius:9px;font-size:13px;font-weight:750}.error{font-size:13px;color:#a04426;line-height:1.7;padding:18px}.foot{text-align:center;font-size:10px;color:#9aa1ad;margin-top:28px;line-height:1.8}.foot a{color:#6d7480}@media(max-width:480px){main{padding-top:52px}.hero p{max-width:320px;margin:auto}.facts{gap:18px}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
+</style></head>
+<body><header><div class="shell nav"><a class="brand" href="/"><span class="mark">▶</span>OpenFind</a><a class="back" href="/">Back to search</a></div></header>
+<main class="shell"><section class="hero"><h1>Video downloader</h1><p>Paste one video link. Get the original video when available.</p></section>
+<form id="form"><div class="inputbox"><input id="url" type="url" autocomplete="url" spellcheck="false" placeholder="Paste video link…" aria-label="Video link" required></div></form>
+<div id="status" class="status"><span class="spinner"></span><span id="statusText">Checking video…</span></div>
+<section id="card" class="card" aria-live="polite"><div id="content"></div></section>
+<div class="foot">Works with supported public links. Private, protected, or unsupported videos may not be available.<br><a href="https://github.com/DilipDC/openfind">Open source</a></div></main>
 <script>
-const form=document.getElementById("form"),input=document.getElementById("url"),card=document.getElementById("card"),status=document.getElementById("status"),statusText=document.getElementById("statusText"),statusSmall=document.getElementById("statusSmall"),content=document.getElementById("content");
-let timer=null,controller=null,lastValue="";
+const form=document.getElementById("form"),input=document.getElementById("url"),status=document.getElementById("status"),statusText=document.getElementById("statusText"),card=document.getElementById("card"),content=document.getElementById("content");let timer=null,controller=null,last="";
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
-function showError(message){status.classList.remove("busy");statusText.textContent="Couldn't get this video";statusSmall.textContent="";content.replaceChildren();content.append(el("div","error",message));}
-async function resolve(){
- const raw=input.value.trim();if(!raw||raw===lastValue)return;
- let parsed;try{parsed=new URL(raw);if(!["http:","https:"].includes(parsed.protocol))throw 0;}catch(_){return}
- lastValue=raw;if(controller)controller.abort();controller=new AbortController();
- card.style.display="block";status.classList.add("busy");statusText.textContent="Finding the main video…";statusSmall.textContent="";content.replaceChildren();
- try{
-  const response=await fetch("/api/video-resolve?url="+encodeURIComponent(parsed.href),{signal:controller.signal,headers:{"Accept":"application/json"}});
-  const data=await response.json();if(!response.ok)throw new Error(data.detail||"This page does not expose a downloadable video.");
-  status.classList.remove("busy");statusText.textContent="Video found";statusSmall.textContent=data.extractor||"Public video";
-  content.replaceChildren();
-  if(data.media_url){
-   const video=el("video","preview");video.controls=true;video.preload="metadata";video.playsInline=true;video.src=data.media_url;video.addEventListener("error",()=>{video.replaceWith(el("div","error","The source stream could not be previewed here. Try the download/open link below."))},{once:true});content.append(video);
-  }
-  content.append(el("h2","title",data.title||"Video"));
-  content.append(el("div","source",new URL(data.webpage_url).hostname));
-  const details=el("div","details");
-  [[ "FORMAT",(data.ext||"unknown").toUpperCase() ],["SIZE",data.size||"Unknown"],["DURATION",data.duration==null?"Unknown":Math.floor(data.duration/60)+":"+String(Math.floor(data.duration%60)).padStart(2,"0")]].forEach(([label,value])=>{const box=el("div","detail");box.append(el("span","",label),el("b","",String(value)));details.append(box)});
-  content.append(details);
-  const link=el("a","download","Open video / download ↗");link.href=data.media_url;link.target="_blank";link.rel="noopener noreferrer";link.download=(data.title||"video")+"."+(data.ext||"mp4");content.append(link);
-  content.append(el("p","note",data.note||"Download availability depends on the source host. This link downloads the available stream; formats that require merging or conversion may not produce a complete MP4."));
- }catch(err){if(err.name==="AbortError")return;showError(err.message||"This site may block video extraction, require a login, or use protected playback.");}
-}
-form.addEventListener("submit",e=>{e.preventDefault();lastValue="";resolve()});
-input.addEventListener("paste",()=>{clearTimeout(timer);lastValue="";timer=setTimeout(resolve,180)});
-input.addEventListener("change",()=>{lastValue="";resolve()});
-</script>
-</body></html>
+function fail(msg){status.style.display="none";content.replaceChildren(el("div","error",msg));card.style.display="block"}
+async function resolve(){const raw=input.value.trim();if(!raw||raw===last)return;let page;try{page=new URL(raw);if(!["http:","https:"].includes(page.protocol))return}catch(_){return}last=raw;if(controller)controller.abort();controller=new AbortController();status.style.display="flex";statusText.textContent="Checking the original video…";card.style.display="none";content.replaceChildren();
+try{const r=await fetch("/api/video-resolve?url="+encodeURIComponent(page.href),{signal:controller.signal,headers:{Accept:"application/json"}});let d;try{d=await r.json()}catch(_){throw Error("Could not read the video response.")}if(!r.ok)throw Error(d.detail||"No verified video found.");status.style.display="none";content.replaceChildren();
+const video=el("video","preview");video.controls=true;video.preload="metadata";video.playsInline=true;video.src=d.media_url;video.addEventListener("error",()=>{video.replaceWith(el("div","error","Preview unavailable. The source may block direct playback."))},{once:true});content.append(video);
+const body=el("div","body");body.append(el("h2","title",d.title||"Video"),el("div","source",new URL(d.webpage_url).hostname));const facts=el("div","facts");[["FORMAT",(d.ext||"video").toUpperCase()],["SIZE",d.size||"Unknown"],["LENGTH",d.duration==null?"—":Math.floor(d.duration/60)+":"+String(Math.floor(d.duration%60)).padStart(2,"0")]].forEach(([a,b])=>{const x=el("div","fact");x.append(el("span","",a),el("b","",String(b)));facts.append(x)});body.append(facts);const a=el("a","download","Download video");a.href=d.media_url;a.target="_blank";a.rel="noopener noreferrer";a.download=(d.title||"video")+"."+(d.ext||"mp4");body.append(a);content.append(body);card.style.display="block";
+}catch(e){if(e.name==="AbortError")return;fail(e.message||"Could not find a verified video.");}}
+form.addEventListener("submit",e=>{e.preventDefault();last="";resolve()});input.addEventListener("paste",()=>{clearTimeout(timer);last="";timer=setTimeout(resolve,250)});input.addEventListener("change",()=>{last="";resolve()});
+</script></body></html>
