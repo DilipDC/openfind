@@ -833,3 +833,102 @@ async def video_scan(url: str = Query(..., min_length=4, max_length=2048)) -> St
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+# Media verification: metadata-only by default; never trust an extension alone.
+_VIDEO_SIGNATURES = [
+    (b"\x00\x00\x00", "ISO Base Media container", "mp4"),
+    (b"\x1a\x45\xdf\xa3", "Matroska/WebM container", "mkv/webm"),
+    (b"RIFF", "RIFF container", "avi/webp/wav"),
+    (b"OggS", "Ogg container", "ogv"),
+    (b"FLV", "Flash video container", "flv"),
+]
+def _format_bytes(value):
+    if value is None or value < 0:
+        return "Unknown"
+    units = ("B", "KB", "MB", "GB", "TB")
+    number = float(value)
+    for unit in units:
+        if number < 1000 or unit == units[-1]:
+            return f"{int(number)} {unit}" if unit == "B" else f"{number:.2f} {unit}"
+        number /= 1000
+    return f"{number:.2f} TB"
+
+
+def _media_magic(data, content_type=""):
+    if not data:
+        return None
+    if data.startswith(b"\x00\x00\x00") and len(data) >= 8 and data[4:8] == b"ftyp":
+        return "MP4/MOV container"
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        return "Matroska/WebM container"
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"AVI ":
+        return "AVI video"
+    if data.startswith(b"FLV"):
+        return "Flash video"
+    if data.startswith(b"OggS"):
+        return "Ogg media"
+    if data.startswith(b"#EXTM3U"):
+        return "HLS playlist (not a video file)"
+    if b"<MPD" in data[:256] or b":MPD" in data[:256]:
+        return "MPEG-DASH manifest (not a video file)"
+    if data.startswith((b"<!DOCTYPE", b"<html", b"<?xml")) or b"<html" in data[:256].lower():
+        return "HTML/text response (not a video file)"
+    if content_type.startswith("video/"):
+        return content_type
+    return None
+
+
+@app.get("/api/video-info", include_in_schema=False)
+async def video_info(url: str = Query(..., min_length=4, max_length=4096)) -> dict[str, Any]:
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = "https://" + candidate
+    try:
+        normalized = _assert_public_video_url(candidate)
+        final_url, content_type, body, status = await asyncio.to_thread(_safe_video_fetch, normalized, 4096, "GET")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except RuntimeError:
+        raise HTTPException(status_code=502, detail="The media host could not be reached.") from None
+    if status >= 400:
+        raise HTTPException(status_code=502, detail=f"Media host returned HTTP {status}.")
+    magic = _media_magic(body, content_type)
+    # Content-Range provides the full size when the host honors a byte-range request.
+    total_size = None
+    try:
+        request = urllib.request.Request(final_url, headers={
+            "User-Agent": "OpenFind-VideoScout/1.0",
+            "Range": "bytes=0-0",
+            "Accept": "*/*",
+        })
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(request, timeout=5) as response:
+            content_range = response.headers.get("Content-Range", "")
+            match = re.search(r"/(\d+)$", content_range)
+            if match:
+                total_size = int(match.group(1))
+            elif response.headers.get("Content-Length") and response.status == 200:
+                total_size = int(response.headers["Content-Length"])
+    except (OSError, ValueError, urllib.error.URLError):
+        pass
+    if total_size is None:
+        try:
+            length = urllib.request.Request(final_url, method="HEAD", headers={"User-Agent":"OpenFind-VideoScout/1.0"})
+            with urllib.request.build_opener(_NoRedirect()).open(length, timeout=5) as response:
+                if response.headers.get("Content-Length"):
+                    total_size = int(response.headers["Content-Length"])
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+    parsed = urllib.parse.urlsplit(final_url)
+    return {
+        "url": final_url,
+        "name": urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1]) or "Media without filename",
+        "content_type": content_type or "unknown",
+        "size_bytes": total_size,
+        "size": _format_bytes(total_size),
+        "verified_format": magic or "Unverified: host did not expose recognizable media bytes",
+        "is_video_candidate": bool(magic and not magic.startswith(("HTML/", "HLS ", "MPEG-DASH"))),
+        "tiny_file_warning": total_size is not None and total_size < 10_000,
+        "note": "Size and format depend on what the public host exposes. A short or blocked response is not proof of a valid complete video.",
+    }
