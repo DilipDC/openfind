@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070b14">
+  <meta name="description" content="OpenFind Video Scout finds publicly exposed video URLs in HTML, JavaScript, CSS, and same-site pages.">
+  <title>Video Scout — OpenFind</title>
+  <style>
+    :root{color-scheme:dark;--bg:#070b14;--panel:#101725;--panel2:#0d1420;--line:#253247;--muted:#92a0b7;--text:#edf3ff;--cyan:#63e6d2;--blue:#6b9cff;--good:#65dba2;--warn:#ffc96b;--red:#ff8585}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:radial-gradient(900px 520px at 50% -180px,#172a46 0%,transparent 70%),var(--bg);color:var(--text);font:15px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+    a{color:inherit}button,input{font:inherit}
+    .shell{width:min(1080px,calc(100% - 36px));margin:0 auto}
+    header{height:76px;border-bottom:1px solid #ffffff12;background:#070b14b8;backdrop-filter:blur(16px)}
+    .nav{height:100%;display:flex;align-items:center;justify-content:space-between;gap:20px}
+    .brand{display:flex;align-items:center;gap:12px;text-decoration:none;font-weight:750;letter-spacing:-.03em}
+    .logo{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#63e6d2,#6b9cff);color:#07101b;font-size:19px;box-shadow:0 5px 24px #63e6d222}
+    .brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:.13em;text-transform:uppercase;font-weight:650}
+    .navlink{color:#c5d2e7;text-decoration:none;border:1px solid var(--line);border-radius:11px;padding:9px 13px;font-size:13px}
+    .navlink:hover{border-color:#6389c4;background:#ffffff08}
+    main{padding:76px 0 48px}
+    .hero{text-align:center;max-width:780px;margin:0 auto 38px}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;border:1px solid #63e6d22f;border-radius:999px;padding:6px 11px;color:var(--cyan);font-size:11px;text-transform:uppercase;letter-spacing:.16em;font-weight:750;background:#63e6d20b}
+    .dot{width:6px;height:6px;border-radius:99px;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
+    h1{margin:20px 0 12px;font-size:clamp(38px,6vw,64px);line-height:1.03;letter-spacing:-.055em}
+    h1 span{background:linear-gradient(100deg,#f2f6ff 14%,#63e6d2 54%,#8baeff 95%);background-clip:text;-webkit-background-clip:text;color:transparent}
+    .subtitle{margin:0 auto;max-width:610px;color:var(--muted);font-size:16px;line-height:1.8}
+    .scanner{max-width:850px;margin:0 auto;background:linear-gradient(145deg,#131d2d,#0c1320);border:1px solid #33445d;border-radius:22px;padding:18px;box-shadow:0 26px 90px #0007}
+    .urlrow{display:flex;gap:10px;padding:7px;border:1px solid #35445b;background:#080e18;border-radius:15px}
+    .urlicon{align-self:center;padding-left:11px;color:var(--cyan);font-size:19px}
+    #urlInput{width:100%;min-width:0;background:transparent;color:var(--text);border:0;outline:0;padding:11px 2px;font-size:14px}
+    #urlInput::placeholder{color:#63728a}
+    #scanBtn{border:0;border-radius:10px;padding:11px 19px;background:var(--cyan);color:#06121b;font-weight:800;white-space:nowrap;cursor:pointer;transition:transform .15s,filter .15s}
+    #scanBtn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+    #scanBtn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+    #cancelBtn{display:none;background:#2a1820;color:#ffc3c3;border:1px solid #70404c;border-radius:10px;padding:9px 12px;cursor:pointer}
+    .privacyline{display:flex;align-items:center;justify-content:space-between;gap:16px;color:#7f8ea7;font-size:11px;padding:12px 4px 2px}
+    .trust{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:17px 0 0}
+    .pill{border:1px solid #253247;background:#0d1420;border-radius:999px;padding:6px 10px;color:#b2c0d6;font-size:11px}
+    .pill b{color:var(--cyan);font-weight:700}
+    .panel{max-width:850px;margin:22px auto 0;border:1px solid var(--line);background:#0d1420d9;border-radius:18px;overflow:hidden}
+    .panelhead{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:17px 20px;border-bottom:1px solid var(--line)}
+    .panelhead h2{font-size:14px;margin:0;font-weight:750;letter-spacing:.01em}
+    .subtle{color:var(--muted);font-size:12px}
+    #statusLabel{color:var(--cyan);font-size:12px;font-variant-numeric:tabular-nums}
+    .progressarea{padding:17px 20px 16px;border-bottom:1px solid var(--line)}
+    .progressmeta{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;color:#c3cee1;margin-bottom:10px}
+    .track{height:6px;background:#202b3e;border-radius:99px;overflow:hidden}
+    #progressFill{height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--blue));border-radius:99px;transition:width .25s ease}
+    .checks{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+    .check{border:1px solid #2a374b;border-radius:8px;padding:5px 9px;color:#71819b;font-size:10px}
+    .check.active{border-color:#326f75;color:var(--cyan);background:#63e6d20b}
+    .check.done{border-color:#28664e;color:var(--good);background:#65dba20c}
+    .empty{padding:30px 20px;text-align:center;color:var(--muted);font-size:13px}
+    .empty strong{display:block;color:#dce7f8;font-size:14px;margin-bottom:5px}
+    #results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:14px}
+    .result{border:1px solid #2a374b;border-radius:14px;background:linear-gradient(155deg,#111b2b,#0a111b);overflow:hidden;min-width:0}
+    .preview{display:block;width:100%;aspect-ratio:16/9;background:#03060b;object-fit:contain}
+    .previewplaceholder{height:120px;display:grid;place-items:center;background:radial-gradient(circle at center,#192a3f,#070b14 70%);color:#7185a5;font-size:31px}
+    .resultbody{padding:14px}
+    .kindrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .kind{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--cyan)}
+    .host{color:#7788a3;font-size:10px;overflow-wrap:anywhere}
+    .result h3{font-size:14px;line-height:1.45;margin:10px 0 5px;overflow-wrap:anywhere}
+    .sourceurl{font-size:10px;line-height:1.5;color:#8090aa;overflow-wrap:anywhere}
+    .actions{display:flex;gap:8px;margin-top:14px}
+    .action{display:inline-flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;border-radius:9px;border:1px solid #34455c;padding:8px 11px;font-size:11px;font-weight:750;flex:1;text-align:center}
+    .action.primary{background:#63e6d2;color:#08131d;border-color:#63e6d2}
+    .action:hover{filter:brightness(1.1)}
+    .streamnote{margin-top:10px;color:var(--warn);font-size:10px;line-height:1.5}
+    #summary{display:none;padding:13px 20px;border-top:1px solid var(--line);color:#c6d2e6;font-size:12px}
+    .stats{display:flex;flex-wrap:wrap;gap:14px;margin-top:9px;color:#899ab4;font-size:10px}
+    .stats b{color:#e7effc;font-weight:750}
+    .hidden{display:none!important}
+    footer{max-width:850px;margin:30px auto 0;color:#76869f;font-size:11px;line-height:1.9;text-align:center}
+    footer a{color:#a8bbd9}
+    @media(max-width:650px){main{padding-top:52px}.shell{width:min(100% - 24px,1080px)}.scanner{padding:12px;border-radius:17px}.urlrow{flex-wrap:wrap;gap:5px}.urlicon{padding-left:8px}#urlInput{width:calc(100% - 44px)}#scanBtn{width:100%;margin-top:5px}.privacyline{align-items:flex-start;flex-direction:column;gap:5px}.panelhead{padding:15px}.progressarea{padding:15px}#results{grid-template-columns:1fr;padding:10px}.resultbody{padding:13px}.subtitle{font-size:14px}.navlink{padding:8px 9px}.brand{font-size:14px}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;scroll-behavior:auto!important}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell nav">
+      <a class="brand" href="/" aria-label="OpenFind home"><span class="logo">▶</span><span>OpenFind<small>Video Scout</small></span></a>
+      <a class="navlink" href="/">← Back to search</a>
+    </div>
+  </header>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow"><span class="dot"></span> Public media discovery</span>
+      <h1>Find video links.<br><span>Skip the guesswork.</span></h1>
+      <p class="subtitle">Inspect a public webpage for video URLs exposed in HTML, embedded JavaScript, stylesheets and a few same-site subpages. Results appear as soon as they are discovered.</p>
+    </section>
+
+    <section class="scanner" aria-label="Scan a website">
+      <form id="scanForm">
+        <div class="urlrow">
+          <span class="urlicon" aria-hidden="true">⌕</span>
+          <input id="urlInput" type="text" inputmode="url" autocomplete="url" spellcheck="false" maxlength="2048" placeholder="https://example.com/watch-page" aria-label="Public webpage URL" required>
+          <button id="scanBtn" type="submit">Scan website ↗</button>
+          <button id="cancelBtn" type="button">Cancel scan</button>
+        </div>
+      </form>
+      <div class="privacyline"><span>◎ No account · No scan history stored by this page</span><span>Bounded scan · Public HTTP/HTTPS only</span></div>
+    </section>
+    <div class="trust" aria-label="Scan methods">
+      <span class="pill"><b>01</b> HTML / video tags</span>
+      <span class="pill"><b>02</b> JavaScript URLs</span>
+      <span class="pill"><b>03</b> CSS references</span>
+      <span class="pill"><b>04</b> Same-site pages</span>
+    </div>
+
+    <section class="panel" aria-live="polite">
+      <div class="panelhead">
+        <div><h2 id="panelTitle">Scan activity</h2><div class="subtle" id="panelSubtitle">Paste a public page URL above to begin.</div></div>
+        <span id="statusLabel">READY</span>
+      </div>
+      <div class="progressarea">
+        <div class="progressmeta"><span id="progressMessage">Waiting for a URL</span><span id="progressPct">0%</span></div>
+        <div class="track" role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack"><div id="progressFill"></div></div>
+        <div class="checks"><span class="check" id="htmlCheck">HTML</span><span class="check" id="jsCheck">JAVASCRIPT</span><span class="check" id="cssCheck">CSS</span><span class="check" id="pagesCheck">SUBPAGES</span><span class="check" id="requestsCheck">REQUESTS</span></div>
+      </div>
+      <div id="emptyState" class="empty"><strong>Ready when you are</strong>Found links will appear here one by one. Direct video files can be previewed; stream manifests are listed separately.</div>
+      <div id="results" class="hidden"></div>
+      <div id="summary"></div>
+    </section>
+
+    <footer>
+      <p>This scanner only inspects content exposed by public HTTP/HTTPS responses. Browser-only <code>blob:</code> URLs, authenticated pages, DRM-protected streams and video players that construct URLs at runtime may not be discoverable. HLS/DASH manifests are linked, not merged into downloadable files. Use downloads only when you have permission to save the media.</p>
+      <p><a href="https://github.com/DilipDC/openfind" target="_blank" rel="noopener noreferrer">Open-source code on GitHub ↗</a> · <a href="/docs" target="_blank" rel="noopener noreferrer">API documentation (if enabled)</a></p>
+    </footer>
+  </main>
+  <script>
+    const form = document.getElementById("scanForm");
+    const input = document.getElementById("urlInput");
+    const scanBtn = document.getElementById("scanBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const progressFill = document.getElementById("progressFill");
+    const progressPct = document.getElementById("progressPct");
+    const progressMessage = document.getElementById("progressMessage");
+    const statusLabel = document.getElementById("statusLabel");
+    const emptyState = document.getElementById("emptyState");
+    const results = document.getElementById("results");
+    const summary = document.getElementById("summary");
+    const scanChecks = {
+      html: document.getElementById("htmlCheck"),
+      js: document.getElementById("jsCheck"),
+      css: document.getElementById("cssCheck"),
+      pages: document.getElementById("pagesCheck"),
+      requests: document.getElementById("requestsCheck")
+    };
+    let controller = null;
+    const seen = new Set();
+    let resultCount = 0;
+
+    function setProgress(percent, message) {
+      const value = Math.max(0, Math.min(100, Number(percent) || 0));
+      progressFill.style.width = value + "%";
+      progressPct.textContent = Math.round(value) + "%";
+      document.getElementById("progressTrack").setAttribute("aria-valuenow", String(Math.round(value)));
+      progressMessage.textContent = message || "Scanning";
+    }
+    function setCheck(key, state) {
+      const el = scanChecks[key];
+      if (!el) return;
+      el.classList.toggle("active", state === "active");
+      el.classList.toggle("done", state === "done");
+    }
+    function safeHttpUrl(value) {
+      try {
+        const url = new URL(value);
+        if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+        if (url.username || url.password) return "";
+        return url.href;
+      } catch (_) { return ""; }
+    }
+    function addVideo(item) {
+      const url = safeHttpUrl(item.url);
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      resultCount += 1;
+      emptyState.classList.add("hidden");
+      results.classList.remove("hidden");
+      const card = document.createElement("article");
+      card.className = "result";
+      const kindRow = document.createElement("div");
+      kindRow.className = "resultbody";
+      const meta = document.createElement("div");
+      meta.className = "kindrow";
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = item.kind || "Video candidate";
+      const host = document.createElement("span");
+      host.className = "host";
+      host.textContent = item.host || "";
+      meta.append(kind, host);
+      const title = document.createElement("h3");
+      title.textContent = item.title || "Discovered media";
+      const source = document.createElement("div");
+      source.className = "sourceurl";
+      source.textContent = url;
+      kindRow.append(meta, title, source);
+
+      if (item.stream !== "true" && /^(MP4|M4V|WebM|QuickTime|Matroska|AVI|Flash|Ogg|3GPP)/i.test(item.kind || "")) {
+        const preview = document.createElement("video");
+        preview.className = "preview";
+        preview.controls = true;
+        preview.preload = "none";
+        preview.playsInline = true;
+        preview.src = url;
+        preview.setAttribute("aria-label", "Preview " + (item.title || "video"));
+        preview.addEventListener("error", () => {
+          preview.replaceWith(makePlaceholder("Preview is not available in this browser"));
+        }, {once:true});
+        card.appendChild(preview);
+      } else {
+        card.appendChild(makePlaceholder(item.stream === "true" ? "▤ Stream manifest" : "▶ Media URL"));
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const openLink = document.createElement("a");
+      openLink.className = "action primary";
+      openLink.href = url;
+      openLink.target = "_blank";
+      openLink.rel = "noopener noreferrer";
+      openLink.textContent = item.stream === "true" ? "Open manifest ↗" : "Open / download ↗";
+      const copyLink = document.createElement("button");
+      copyLink.className = "action";
+      copyLink.type = "button";
+      copyLink.textContent = "Copy link";
+      copyLink.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(url);
+          copyLink.textContent = "Copied";
+          setTimeout(() => { copyLink.textContent = "Copy link"; }, 1500);
+        } catch (_) {
+          window.prompt("Copy this media URL:", url);
+        }
+      });
+      actions.append(openLink, copyLink);
+      kindRow.appendChild(actions);
+      if (item.stream === "true") {
+        const note = document.createElement("div");
+        note.className = "streamnote";
+        note.textContent = "Playlist/manifest only. This is not a merged video file; DRM or browser restrictions are not bypassed.";
+        kindRow.appendChild(note);
+      } else {
+        const note = document.createElement("div");
+        note.className = "subtle";
+        note.style.marginTop = "9px";
+        note.textContent = "Downloads depend on the source server and browser permissions.";
+        kindRow.appendChild(note);
+      }
+      card.appendChild(kindRow);
+      results.appendChild(card);
+      document.getElementById("panelSubtitle").textContent = resultCount + " candidate" + (resultCount === 1 ? "" : "s") + " found so far";
+    }
+    function makePlaceholder(label) {
+      const box = document.createElement("div");
+      box.className = "previewplaceholder";
+      const content = document.createElement("div");
+      content.textContent = label;
+      content.style.fontSize = "12px";
+      box.appendChild(content);
+      return box;
+    }
+    function finish(payload) {
+      statusLabel.textContent = "COMPLETE";
+      statusLabel.style.color = "var(--good)";
+      scanBtn.disabled = false;
+      scanBtn.textContent = "Scan again ↗";
+      cancelBtn.style.display = "none";
+      setProgress(100, payload.message || "Scan finished");
+      Object.keys(scanChecks).forEach(key => setCheck(key, "done"));
+      summary.style.display = "block";
+      const stats = payload.stats || {};
+      summary.replaceChildren();
+      const message = document.createElement("div");
+      message.textContent = payload.message || ("Found " + resultCount + " candidate URL(s).");
+      const statsRow = document.createElement("div");
+      statsRow.className = "stats";
+      [["Pages",stats.pages],["JavaScript",stats.scripts],["Stylesheets",stats.stylesheets],["Requests",stats.requests]].forEach(pair => {
+        const span = document.createElement("span");
+        const b = document.createElement("b");
+        b.textContent = String(pair[1] == null ? 0 : pair[1]);
+        span.append(document.createTextNode(pair[0] + " "),b);
+        statsRow.appendChild(span);
+      });
+      summary.append(message, statsRow);
+      if (!resultCount) emptyState.classList.remove("hidden");
+    }
+    function fail(message) {
+      statusLabel.textContent = "NEEDS ATTENTION";
+      statusLabel.style.color = "var(--warn)";
+      setProgress(100, message);
+      scanBtn.disabled = false;
+      scanBtn.textContent = "Try again ↗";
+      cancelBtn.style.display = "none";
+      emptyState.classList.remove("hidden");
+      emptyState.querySelector("strong").textContent = "Scan could not finish";
+      emptyState.lastChild.textContent = " " + message;
+    }
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      if (controller) controller.abort();
+      controller = new AbortController();
+      const raw = input.value.trim();
+      if (!raw) { input.focus(); return; }
+      let url = raw;
+      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Enter an HTTP or HTTPS URL.");
+        if (parsed.username || parsed.password) throw new Error("URLs containing a username or password are not accepted.");
+        url = parsed.href;
+      } catch (err) {
+        fail(err.message || "Enter a valid public webpage URL.");
+        return;
+      }
+      seen.clear();
+      resultCount = 0;
+      results.replaceChildren();
+      results.classList.add("hidden");
+      summary.style.display = "none";
+      summary.replaceChildren();
+      emptyState.classList.add("hidden");
+      scanBtn.disabled = true;
+      scanBtn.textContent = "Scanning…";
+      cancelBtn.style.display = "inline-block";
+      statusLabel.textContent = "SCANNING";
+      statusLabel.style.color = "var(--cyan)";
+      document.getElementById("panelTitle").textContent = "Scan activity";
+      document.getElementById("panelSubtitle").textContent = new URL(url).hostname;
+      Object.keys(scanChecks).forEach(key => setCheck(key, ""));
+      setProgress(2, "Connecting to the public page");
+      try {
+        const response = await fetch("/api/video-scan?url=" + encodeURIComponent(url), {
+          signal: controller.signal,
+          headers: {"Accept":"application/x-ndjson"}
+        });
+        if (!response.ok) {
+          let reason = "Unable to scan that URL.";
+          try { const body = await response.json(); reason = body.detail || reason; } catch (_) {}
+          throw new Error(reason);
+        }
+        if (!response.body) throw new Error("Streaming responses are not supported by this browser.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        let gotDone = false;
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          pending += decoder.decode(part.value, {stream:true});
+          const lines = pending.split("\n");
+          pending = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let eventData;
+            try { eventData = JSON.parse(line); } catch (_) { continue; }
+            if (eventData.type === "progress") {
+              setProgress(eventData.percent, eventData.message);
+              const text = (eventData.message || "").toLowerCase();
+              if (text.includes("html") || text.includes("first page") || text.includes("url")) setCheck("html","active");
+              if (text.includes("javascript")) setCheck("js","active");
+              if (text.includes("css")) setCheck("css","active");
+              if (text.includes("subpage")) setCheck("pages","active");
+              if (text.includes("request") || text.includes("connecting")) setCheck("requests","active");
+            } else if (eventData.type === "video") {
+              addVideo(eventData.video);
+            } else if (eventData.type === "error") {
+              throw new Error(eventData.message || "The scan failed.");
+            } else if (eventData.type === "done") {
+              gotDone = true;
+              (eventData.videos || []).forEach(addVideo);
+              finish(eventData);
+            }
+          }
+        }
+        if (pending.trim()) {
+          try {
+            const last = JSON.parse(pending);
+            if (last.type === "done") finish(last);
+          } catch (_) {}
+        }
+        if (!gotDone && !pending.trim()) {
+          statusLabel.textContent = "STOPPED";
+          scanBtn.disabled = false;
+          scanBtn.textContent = "Scan again ↗";
+          cancelBtn.style.display = "none";
+          if (!resultCount) fail("The connection ended before the scan summary arrived.");
+        }
+      } catch (err) {
+        if (err.name === "AbortError") {
+          statusLabel.textContent = "CANCELLED";
+          statusLabel.style.color = "var(--muted)";
+          setProgress(0, "Scan cancelled");
+          scanBtn.disabled = false;
+          scanBtn.textContent = "Scan website ↗";
+          cancelBtn.style.display = "none";
+          return;
+        }
+        fail(err.message || "A network error interrupted the scan.");
+      } finally {
+        controller = null;
+      }
+    });
+    cancelBtn.addEventListener("click", () => { if (controller) controller.abort(); });
+  </script>
+</body>
+</html>
