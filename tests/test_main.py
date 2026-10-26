@@ -97,3 +97,43 @@ def test_searxng_result_normalization():
     assert result is not None
     assert result["source"] == "test"
     assert result["snippet"] == "Public result"
+
+
+
+def test_video_finder_route():
+    response = client.get("/video")
+    assert response.status_code == 200
+    assert "Video Scout" in response.text
+    assert "JavaScript" in response.text
+
+
+def test_video_parser_discovers_media_scripts_styles_and_subpages():
+    source = """
+    <html><head><title>Public clips</title>
+    <link rel="stylesheet" href="/assets/player.css">
+    <script src="/assets/player.js"></script></head>
+    <body><video controls><source src="/media/trailer.mp4" type="video/mp4"></video>
+    <a href="/watch/episode-2">Next episode</a></body></html>
+    """
+    parser, scripts, styles, pages = main._parse_video_html(source, "https://media.example.org/")
+    assert parser.title_parts == ["Public clips"]
+    assert "/media/trailer.mp4" in parser.media_urls
+    assert scripts == ["https://media.example.org/assets/player.js"]
+    assert styles == ["https://media.example.org/assets/player.css"]
+    assert pages == ["https://media.example.org/watch/episode-2"]
+
+
+def test_video_kind_recognizes_downloads_and_stream_manifests():
+    assert main._video_kind("https://cdn.example.org/clip.MP4") == "MP4 video"
+    assert main._video_kind("https://cdn.example.org/live.m3u8") == "HLS stream playlist"
+    assert main._video_kind("https://cdn.example.org/watch?id=2") is None
+
+
+def test_video_scanner_blocks_private_addresses():
+    for value in ("http://127.0.0.1/", "http://10.0.0.8/", "http://localhost/"):
+        try:
+            main._assert_public_video_url(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"private URL should be rejected: {value}")
