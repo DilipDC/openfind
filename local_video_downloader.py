@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import queue
+import shutil
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -95,7 +96,7 @@ class LocalDownloader(tk.Tk):
 
         options = {
             "outtmpl": str(folder / "%(title).150B-%(id)s.%(ext)s"),
-            "format": "bv*+ba/b",
+            "format": "bv*+ba/b" if shutil.which("ffmpeg") else "best[ext=mp4]/best",
             "merge_output_format": "mp4",
             "noplaylist": True,
             "retries": 3,
