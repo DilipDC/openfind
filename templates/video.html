@@ -200,7 +200,25 @@
       const source = document.createElement("div");
       source.className = "sourceurl";
       source.textContent = url;
-      kindRow.append(meta, title, source);
+      const details = document.createElement("div");
+      details.className = "subtle";
+      details.style.marginTop = "8px";
+      details.textContent = "Checking file size and format…";
+      kindRow.append(meta, title, source, details);
+      fetch("/api/video-info?url=" + encodeURIComponent(url))
+        .then(response => response.ok ? response.json() : Promise.reject(new Error("Unavailable")))
+        .then(info => {
+          details.textContent = "Size: " + (info.size || "Unknown") + " · " + (info.verified_format || info.content_type);
+          if (info.tiny_file_warning) {
+            details.textContent += " · Very small response — may not be a complete video";
+            details.style.color = "var(--warn)";
+          } else if (!info.is_video_candidate) {
+            details.textContent += " · Video not verified";
+            details.style.color = "var(--warn)";
+          }
+          if (info.name && (!item.title || item.title === "video")) title.textContent = info.name;
+        })
+        .catch(() => { details.textContent = "Size/format not provided by source"; });
 
       if (item.stream !== "true" && /^(MP4|M4V|WebM|QuickTime|Matroska|AVI|Flash|Ogg|3GPP)/i.test(item.kind || "")) {
         const preview = document.createElement("video");
@@ -278,7 +296,9 @@
       const stats = payload.stats || {};
       summary.replaceChildren();
       const message = document.createElement("div");
-      message.textContent = payload.message || ("Found " + resultCount + " candidate URL(s).");
+      message.textContent = payload.page_title
+        ? "Website: " + payload.page_title + " · " + (payload.message || ("Found " + resultCount + " candidate URL(s)."))
+        : (payload.message || ("Found " + resultCount + " candidate URL(s)."));
       const statsRow = document.createElement("div");
       statsRow.className = "stats";
       [["Pages",stats.pages],["JavaScript",stats.scripts],["Stylesheets",stats.stylesheets],["Requests",stats.requests]].forEach(pair => {
