@@ -56,7 +56,7 @@ def test_direct_download_streams_as_attachment_and_preserves_range_headers():
             self.closed = True
 
     upstream = FakeResponse()
-    with patch("main._assert_public_video_url", return_value=url), \\
+    with patch("main._assert_public_video_url", return_value=url), \
          patch("main._open_direct_video_response", return_value=(upstream, url)) as open_media:
         response = client.get(
             "/api/video-download",
@@ -190,7 +190,7 @@ def test_direct_download_revalidates_redirect_targets():
             raise redirect
 
     opener = FakeOpener()
-    with patch("main.urllib.request.build_opener", return_value=opener), \\
+    with patch("main.urllib.request.build_opener", return_value=opener), \
          patch("main._assert_public_video_url", side_effect=lambda value: (
              value if value == url else (_ for _ in ()).throw(ValueError("Private, local, or reserved network addresses are blocked."))
          )):
