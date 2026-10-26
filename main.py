@@ -15,6 +15,7 @@ import re
 import socket
 import shutil
 import tempfile
+import subprocess
 import urllib.error
 from html import unescape
 from html.parser import HTMLParser
@@ -24,7 +25,7 @@ from urllib.parse import urlparse
 
 from ddgs import DDGS
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from spellchecker import SpellChecker
 
@@ -937,6 +938,123 @@ async def video_info(url: str = Query(..., min_length=4, max_length=4096)) -> di
     }
 
 
+
+# Extra engines adapted from the open-source ReClip pattern and public TeraBox share API examples.
+_GALLERY_DL_HOSTS = {
+    "instagram.com", "redd.it", "reddit.com", "x.com", "twitter.com", "tumblr.com",
+    "pixiv.net", "flickr.com", "imgur.com", "deviantart.com", "bsky.app",
+}
+_TERABOX_HOSTS = {
+    "terabox.com", "terabox.app", "1024terabox.com", "teraboxshare.com", "teraboxlink.com",
+}
+_VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".ts", ".mts", ".m2ts"}
+
+
+def _host_is(host: str, domains: set[str]) -> bool:
+    host = (host or "").lower().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+def _terabox_share_code(url: str) -> tuple[str, str]:
+    parsed = urllib.parse.urlsplit(url)
+    match = re.search(r"/(?:s|sharing/link)/([^/?#]+)", parsed.path, re.I)
+    if not match:
+        raise ValueError("Paste a TeraBox public share link, not a homepage or search page.")
+    password = urllib.parse.parse_qs(parsed.query).get("pwd", [""])[0][:16]
+    return match.group(1), password
+
+
+def _terabox_api_json(endpoint: str, *, params: dict[str, str] | None = None, body: dict[str, str] | None = None) -> dict[str, Any]:
+    api_url = "https://terabox-dl.qtcloud.workers.dev/api/" + endpoint
+    if params:
+        api_url += "?" + urllib.parse.urlencode(params)
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(api_url, data=data, method="POST" if data is not None else "GET", headers={
+        "User-Agent": "OpenFind/1.2", "Accept": "application/json", "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(request, timeout=18) as response:
+        payload = json.loads(response.read(2_000_000).decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("ok") is False:
+        message = payload.get("message") if isinstance(payload, dict) else None
+        raise RuntimeError(_clean_text(message or "TeraBox share API did not return a file.", 240))
+    return payload
+
+
+def _terabox_video_info(url: str) -> dict[str, Any]:
+    share_code, password = _terabox_share_code(url)
+    info = _terabox_api_json("get-info", params={"shorturl": share_code, "pwd": password})
+    candidates: list[dict[str, Any]] = []
+    def visit(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("is_dir", "0")) == "1":
+                visit(item.get("children"))
+            elif item.get("fs_id") is not None:
+                candidates.append(item)
+    visit(info.get("list"))
+    videos = [item for item in candidates if Path(str(item.get("filename") or "")).suffix.lower() in _VIDEO_EXTENSIONS]
+    selected = videos[0] if videos else (candidates[0] if candidates else None)
+    if not selected:
+        raise RuntimeError("No downloadable file was found in this TeraBox share.")
+    return {
+        "title": _clean_text(selected.get("filename") or "TeraBox file", 250),
+        "webpage_url": url, "extractor": "TeraBox",
+        "ext": Path(str(selected.get("filename") or "")).suffix.lstrip(".").lower() or "unknown",
+        "size_bytes": int(selected["size"]) if str(selected.get("size", "")).isdigit() else None,
+        "_terabox": {key: str(info.get(key, "")) for key in ("shareid", "uk", "sign", "timestamp")} | {
+            "fs_id": str(selected.get("fs_id", "")), "pwd": password, "share_code": share_code,
+        },
+    }
+
+
+def _terabox_download_redirect(url: str) -> str:
+    metadata = _terabox_video_info(url)
+    fields = metadata["_terabox"]
+    result = _terabox_api_json("get-download", body={key: fields[key] for key in ("shareid", "uk", "sign", "timestamp", "fs_id")})
+    download_url = _safe_http_url(result.get("downloadLink"))
+    if not download_url:
+        raise RuntimeError("TeraBox did not return a valid public download URL.")
+    _assert_public_video_url(download_url)
+    return download_url
+
+
+def _gallery_dl_probe(url: str) -> dict[str, Any] | None:
+    host = (urlparse(url).hostname or "").lower()
+    if not _host_is(host, _GALLERY_DL_HOSTS):
+        return None
+    try:
+        probe = subprocess.run(["gallery-dl", "--simulate", "--dump-json", url], capture_output=True, text=True, timeout=22, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if probe.returncode != 0:
+        return None
+    title = Path(urllib.parse.unquote(urlparse(url).path.rstrip("/").split("/")[-1] or "social-media-video")).stem
+    title = re.sub(r"[-_]+", " ", title).strip() or host
+    return {
+        "title": _clean_text(title, 250), "webpage_url": url, "extractor": "gallery-dl",
+        "ext": "unknown", "size_bytes": None, "size": "Unknown", "duration": None,
+        "thumbnail": None, "download_url": "/api/video-download?url=" + urllib.parse.quote(url, safe=""),
+        "preview_url": None, "note": "Secondary extractor selected; the post must expose a downloadable video.",
+    }
+
+
+def _gallery_dl_download(url: str, output_dir: str) -> Path:
+    host = (urlparse(url).hostname or "").lower()
+    if not _host_is(host, _GALLERY_DL_HOSTS):
+        raise RuntimeError("No alternate extractor is configured for this site.")
+    result = subprocess.run(["gallery-dl", "--destination", output_dir, url], capture_output=True, text=True, timeout=240, check=False)
+    if result.returncode != 0:
+        lines = (result.stderr or result.stdout or "gallery-dl could not extract this post.").strip().splitlines()
+        raise RuntimeError(_clean_text(lines[-1] if lines else "gallery-dl failed.", 240))
+    files = [p for p in Path(output_dir).rglob("*") if p.is_file() and p.suffix.lower() in _VIDEO_EXTENSIONS and p.stat().st_size > 10_000]
+    if not files:
+        raise RuntimeError("The alternate extractor did not find a downloadable video in this post.")
+    return max(files, key=lambda p: p.stat().st_size)
+
+
 def _video_ydl_options(*, skip_download: bool, output_template: str | None = None) -> dict[str, Any]:
     """Shared yt-dlp configuration for supported public video pages."""
     deno_bin = Path.home() / ".deno" / "bin"
@@ -999,6 +1117,19 @@ async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) ->
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    if _host_is(urlparse(normalized).hostname or "", _TERABOX_HOSTS):
+        try:
+            metadata = await asyncio.to_thread(_terabox_video_info, normalized)
+            metadata["size"] = _format_bytes(metadata["size_bytes"]) if metadata["size_bytes"] is not None else "Unknown"
+            metadata["download_url"] = "/api/video-download?url=" + urllib.parse.quote(normalized, safe="")
+            metadata["preview_url"] = None
+            metadata["note"] = "TeraBox public-share links use an external resolver; only download files you are authorized to access."
+            metadata.pop("_terabox", None)
+            return metadata
+        except Exception as exc:
+            logger.info("TeraBox resolve failed (%s): %s", type(exc).__name__, str(exc)[:200])
+            raise HTTPException(status_code=422, detail="TeraBox could not resolve this public share. Check the link, password, and provider availability.") from None
+
     def extract() -> dict[str, Any]:
         try:
             import yt_dlp
@@ -1048,6 +1179,12 @@ async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) ->
         logger.info("Video resolve failed (%s): %s", type(exc).__name__, str(exc)[:240])
         if "not installed yet" in str(exc):
             raise HTTPException(status_code=503, detail="The video engine is not installed. Check the latest deployment logs.") from None
+        try:
+            alternate = await asyncio.to_thread(_gallery_dl_probe, normalized)
+        except Exception:
+            alternate = None
+        if alternate:
+            return alternate
         status_code, detail = _video_extraction_error(exc)
         raise HTTPException(status_code=status_code, detail=detail) from None
 
@@ -1063,6 +1200,14 @@ async def video_download(url: str = Query(..., min_length=4, max_length=2048)):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    if _host_is(urlparse(normalized).hostname or "", _TERABOX_HOSTS):
+        try:
+            target = await asyncio.to_thread(_terabox_download_redirect, normalized)
+            return RedirectResponse(target, status_code=302)
+        except Exception as exc:
+            logger.info("TeraBox download failed (%s): %s", type(exc).__name__, str(exc)[:200])
+            raise HTTPException(status_code=422, detail="TeraBox could not create a download link for this public share. Check the link and try again.") from None
+
     temp_dir = tempfile.mkdtemp(prefix="openfind-video-")
 
     def download_file() -> Path:
@@ -1073,8 +1218,13 @@ async def video_download(url: str = Query(..., min_length=4, max_length=2048)):
             # Bound processing on the free web service; users can retry smaller formats if needed.
             options["max_filesize"] = 1_000_000_000
             options["overwrites"] = True
-            with yt_dlp.YoutubeDL(options) as ydl:
-                result = ydl.extract_info(normalized, download=True)
+            try:
+                with yt_dlp.YoutubeDL(options) as ydl:
+                    result = ydl.extract_info(normalized, download=True)
+            except Exception:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                os.makedirs(temp_dir, exist_ok=True)
+                return _gallery_dl_download(normalized, temp_dir)
             if result and result.get("entries") is not None:
                 entries = [entry for entry in result["entries"] if entry]
                 if not entries:
