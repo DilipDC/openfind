@@ -125,8 +125,9 @@ The Video Scout uses an ordered, bounded Python extraction pipeline instead of g
 3. **Host-specific resolver**: route public TeraBox shares to the dedicated share resolver.
 4. **Primary extraction**: use the maintained yt-dlp extractor catalogue to inspect supported public video pages and choose the site's actual media formats. Keep short-lived CDN URLs out of browser metadata.
 5. **Secondary extraction**: if yt-dlp fails, try gallery-dl only for the explicitly supported social hosts.
-6. **Download**: use the same validated original page URL so yt-dlp can select formats and merge audio/video with FFmpeg where needed; direct media links redirect to their public file.
-7. **Fail safely**: return a bounded, sanitized error for login walls, automated-traffic blocks, unsupported hosts, or unavailable FFmpeg. Do not bypass DRM, authentication, or private access controls.
-8. **Regression tests**: `tests/test_main.py` and `tests/test_video_algorithm.py` cover URL validation, the direct-media path, extractor ordering, metadata handling, fallback behavior, and invalid media responses. Run `pytest -q` locally; GitHub Actions runs the suite on pushes and pull requests.
+6. **Bounded HTML fallback**: if the extractors fail, inspect the public page's exposed media attributes and inline HTML/JavaScript/CSS for direct media URLs. This fallback does not execute scripts, crawl the site, or bypass sign-in/DRM.
+7. **Download**: use yt-dlp to select formats and merge audio/video with FFmpeg where needed. Direct media downloads are streamed as attachments with byte-range support; every redirect is revalidated. Hosted direct downloads larger than 1 GB are rejected.
+8. **Fail safely**: return a bounded, sanitized error for login walls, automated-traffic blocks, unsupported hosts, or unavailable FFmpeg. Do not bypass DRM, authentication, or private access controls.
+9. **Regression tests**: `tests/test_main.py` and `tests/test_video_algorithm.py` cover URL validation, direct-media streaming, extractor ordering, HTML fallback, metadata handling, and completed-file selection. Run `pytest -q` locally; GitHub Actions runs the suite on pushes and pull requests.
 
 The algorithm can only extract content that the selected host and extractor make accessible to the server. YouTube and social platforms may block cloud-hosted requests or require authorized cookies; no extractor can guarantee every URL will work.
