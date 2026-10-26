@@ -1070,13 +1070,18 @@ def _gallery_dl_download(url: str, output_dir: str) -> Path:
 
 
 def _video_ydl_options(*, skip_download: bool, output_template: str | None = None) -> dict[str, Any]:
-    """Shared yt-dlp configuration for supported public video pages."""
+    """Configure yt-dlp according to the tools actually present on this server."""
     deno_bin = Path.home() / ".deno" / "bin"
     if deno_bin.is_dir():
         current_path = os.environ.get("PATH", "")
         if str(deno_bin) not in current_path.split(os.pathsep):
             os.environ["PATH"] = str(deno_bin) + os.pathsep + current_path
 
+    ffmpeg_available = shutil.which("ffmpeg") is not None
+    js_runtime = next(
+        (name for name in ("deno", "node", "bun", "quickjs") if shutil.which(name)),
+        None,
+    )
     options: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
@@ -1086,20 +1091,25 @@ def _video_ydl_options(*, skip_download: bool, output_template: str | None = Non
         "extractor_retries": 2,
         "retries": 3,
         "fragment_retries": 3,
-        "format": "bv*+ba/b",
-        "js_runtimes": {"deno": {}},
+        # With FFmpeg, separate high-quality video/audio streams can be merged.
+        # Without it, prefer a single muxed format rather than guaranteeing a merge failure.
+        "format": "bv*+ba/b" if ffmpeg_available else "best[ext=mp4]/best",
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         },
     }
+    if js_runtime:
+        options["js_runtimes"] = {js_runtime: {}}
+
     cookie_file = os.getenv("YTDLP_COOKIES_FILE", "").strip()
     if cookie_file and Path(cookie_file).is_file():
         options["cookiefile"] = cookie_file
     if output_template:
         options["outtmpl"] = output_template
-        options["merge_output_format"] = "mp4"
-        options["recodevideo"] = "mp4"
         options["restrictfilenames"] = True
+        if ffmpeg_available:
+            options["merge_output_format"] = "mp4"
+            options["recodevideo"] = "mp4"
     return options
 
 
