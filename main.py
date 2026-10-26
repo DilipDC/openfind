@@ -1103,6 +1103,55 @@ def _video_ydl_options(*, skip_download: bool, output_template: str | None = Non
     return options
 
 
+def _quick_video_html_fallback(target: str) -> dict[str, Any] | None:
+    """Find explicitly exposed media URLs when a site's yt-dlp extractor is unavailable.
+
+    This deliberately inspects only the public page and its inline HTML/JSON/JS/CSS.
+    It does not execute scripts, crawl subpages, or bypass authentication/DRM.
+    """
+    try:
+        final_url, content_type, body, status = _safe_video_fetch(
+            target, MAX_VIDEO_HTML_BYTES, "GET"
+        )
+    except (RuntimeError, ValueError):
+        return None
+    if status >= 400 or not ("html" in content_type.lower() or content_type.lower().startswith("text/")):
+        return None
+
+    source = body.decode("utf-8", errors="replace")
+    parser, _, _, _ = _parse_video_html(source, final_url)
+    candidates = list(parser.media_urls) + _video_candidates(source, final_url)
+    for blob in parser.inline_scripts + parser.inline_styles:
+        candidates.extend(_video_candidates(blob, final_url))
+
+    page_title = _clean_text(" ".join(parser.title_parts).strip(), 180)
+    for raw in list(dict.fromkeys(candidates))[:MAX_VIDEO_ITEMS]:
+        value = _resolve_video_url(raw, final_url)
+        kind = _video_kind(value or "")
+        if not value or not kind:
+            continue
+        try:
+            value = _assert_public_video_url(value)
+        except ValueError:
+            continue
+        item = _video_item(value, kind)
+        extension = item["extension"].lstrip(".") or "unknown"
+        return {
+            "title": item["title"] or page_title or "Video",
+            "webpage_url": target,
+            "extractor": "HTML media fallback",
+            "ext": extension,
+            "size_bytes": None,
+            "size": "Unknown",
+            "duration": None,
+            "thumbnail": None,
+            "download_url": "/api/video-download?url=" + urllib.parse.quote(value, safe=""),
+            "preview_url": value if item["stream"] == "false" else None,
+            "note": "Found a public media URL in page HTML. Sites requiring sign-in, special request headers, or protected playback may still block the download.",
+        }
+    return None
+
+
 def _video_extraction_error(exc: Exception) -> tuple[int, str]:
     message = str(exc).lower()
     if any(term in message for term in ("sign in to confirm", "not a bot", "confirm you're not", "confirm you’re not", "login required", "authentication required", "cookies")):
@@ -1212,6 +1261,12 @@ async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) ->
             alternate = None
         if alternate:
             return alternate
+        try:
+            html_fallback = await asyncio.to_thread(_quick_video_html_fallback, normalized)
+        except Exception:
+            html_fallback = None
+        if html_fallback:
+            return html_fallback
         status_code, detail = _video_extraction_error(exc)
         raise HTTPException(status_code=status_code, detail=detail) from None
 
