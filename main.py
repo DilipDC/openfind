@@ -947,7 +947,21 @@ _GALLERY_DL_HOSTS = {
 _TERABOX_HOSTS = {
     "terabox.com", "terabox.app", "1024terabox.com", "teraboxshare.com", "teraboxlink.com",
 }
-_VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".ts", ".mts", ".m2ts"}
+_VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".ogv", ".3gp", ".ts", ".mts", ".m2ts"}
+
+
+def _completed_video_files(directory: str | Path, *, recursive: bool = False) -> list[Path]:
+    """Return actual video outputs, excluding subtitles, thumbnails, and audio-only files."""
+    root = Path(directory)
+    candidates = root.rglob("*") if recursive else root.iterdir()
+    output: list[Path] = []
+    for path in candidates:
+        try:
+            if path.is_file() and path.suffix.lower() in _VIDEO_EXTENSIONS and path.stat().st_size > 10_000:
+                output.append(path)
+        except OSError:
+            continue
+    return output
 
 
 def _host_is(host: str, domains: set[str]) -> bool:
@@ -1049,9 +1063,9 @@ def _gallery_dl_download(url: str, output_dir: str) -> Path:
     if result.returncode != 0:
         lines = (result.stderr or result.stdout or "gallery-dl could not extract this post.").strip().splitlines()
         raise RuntimeError(_clean_text(lines[-1] if lines else "gallery-dl failed.", 240))
-    files = [p for p in Path(output_dir).rglob("*") if p.is_file() and p.suffix.lower() in _VIDEO_EXTENSIONS and p.stat().st_size > 10_000]
+    files = _completed_video_files(output_dir, recursive=True)
     if not files:
-        raise RuntimeError("The alternate extractor did not find a downloadable video in this post.")
+        raise RuntimeError("The alternate extractor did not find a completed video file in this post.")
     return max(files, key=lambda p: p.stat().st_size)
 
 
@@ -1087,6 +1101,55 @@ def _video_ydl_options(*, skip_download: bool, output_template: str | None = Non
         options["recodevideo"] = "mp4"
         options["restrictfilenames"] = True
     return options
+
+
+def _quick_video_html_fallback(target: str) -> dict[str, Any] | None:
+    """Find explicitly exposed media URLs when a site's yt-dlp extractor is unavailable.
+
+    This deliberately inspects only the public page and its inline HTML/JSON/JS/CSS.
+    It does not execute scripts, crawl subpages, or bypass authentication/DRM.
+    """
+    try:
+        final_url, content_type, body, status = _safe_video_fetch(
+            target, MAX_VIDEO_HTML_BYTES, "GET"
+        )
+    except (RuntimeError, ValueError):
+        return None
+    if status >= 400 or not ("html" in content_type.lower() or content_type.lower().startswith("text/")):
+        return None
+
+    source = body.decode("utf-8", errors="replace")
+    parser, _, _, _ = _parse_video_html(source, final_url)
+    candidates = list(parser.media_urls) + _video_candidates(source, final_url)
+    for blob in parser.inline_scripts + parser.inline_styles:
+        candidates.extend(_video_candidates(blob, final_url))
+
+    page_title = _clean_text(" ".join(parser.title_parts).strip(), 180)
+    for raw in list(dict.fromkeys(candidates))[:MAX_VIDEO_ITEMS]:
+        value = _resolve_video_url(raw, final_url)
+        kind = _video_kind(value or "")
+        if not value or not kind:
+            continue
+        try:
+            value = _assert_public_video_url(value)
+        except ValueError:
+            continue
+        item = _video_item(value, kind)
+        extension = item["extension"].lstrip(".") or "unknown"
+        return {
+            "title": item["title"] or page_title or "Video",
+            "webpage_url": target,
+            "extractor": "HTML media fallback",
+            "ext": extension,
+            "size_bytes": None,
+            "size": "Unknown",
+            "duration": None,
+            "thumbnail": None,
+            "download_url": "/api/video-download?url=" + urllib.parse.quote(value, safe=""),
+            "preview_url": value if item["stream"] == "false" else None,
+            "note": "Found a public media URL in page HTML. Sites requiring sign-in, special request headers, or protected playback may still block the download.",
+        }
+    return None
 
 
 def _video_extraction_error(exc: Exception) -> tuple[int, str]:
@@ -1198,12 +1261,106 @@ async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) ->
             alternate = None
         if alternate:
             return alternate
+        try:
+            html_fallback = await asyncio.to_thread(_quick_video_html_fallback, normalized)
+        except Exception:
+            html_fallback = None
+        if html_fallback:
+            return html_fallback
         status_code, detail = _video_extraction_error(exc)
         raise HTTPException(status_code=status_code, detail=detail) from None
 
 
+MAX_DIRECT_VIDEO_BYTES = 1_000_000_000
+_DIRECT_RANGE_RE = re.compile(r"^bytes=(?:\d+-\d*|-\d+)$", re.I)
+_DIRECT_REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+
+def _open_direct_video_response(url: str, range_header: str | None = None):
+    """Open a direct media URL without automatic redirects so every hop can be validated."""
+    current = url
+    opener = urllib.request.build_opener(_NoRedirect())
+    for _ in range(4):
+        safe_url = _assert_public_video_url(current)
+        headers = {
+            "User-Agent": "OpenFind-VideoDownloader/1.2",
+            "Accept": "video/*,application/octet-stream;q=0.9,*/*;q=0.4",
+            "Accept-Encoding": "identity",
+        }
+        if range_header and _DIRECT_RANGE_RE.fullmatch(range_header.strip()):
+            headers["Range"] = range_header.strip()
+        request = urllib.request.Request(safe_url, headers=headers, method="GET")
+        try:
+            response = opener.open(request, timeout=25)
+        except urllib.error.HTTPError as exc:
+            if exc.code in _DIRECT_REDIRECT_CODES:
+                location = exc.headers.get("Location", "")
+                exc.close()
+                if not location:
+                    raise RuntimeError("The media host returned an invalid redirect.") from None
+                current = urllib.parse.urljoin(safe_url, location)
+                continue
+            status = exc.code
+            exc.close()
+            raise RuntimeError(f"The media host returned HTTP {status}.") from None
+        except (urllib.error.URLError, OSError, TimeoutError):
+            raise RuntimeError("Could not connect to the media host. The link may have expired or the host may block downloads.") from None
+
+        headers = response.headers
+        content_type = headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type.startswith("text/") or content_type in {"application/json", "application/xhtml+xml"} or content_type.endswith("+json"):
+            response.close()
+            raise RuntimeError("The supplied link returned a webpage or error response, not a video file. Paste the original video page link instead.")
+        length = headers.get("Content-Length", "")
+        try:
+            if length and int(length) > MAX_DIRECT_VIDEO_BYTES:
+                response.close()
+                raise RuntimeError("This direct video exceeds the 1 GB server download limit. Use the local downloader for large files.")
+            content_range = headers.get("Content-Range", "")
+            total_match = re.search(r"/(\d+)$", content_range)
+            if total_match and int(total_match.group(1)) > MAX_DIRECT_VIDEO_BYTES:
+                response.close()
+                raise RuntimeError("This direct video exceeds the 1 GB server download limit. Use the local downloader for large files.")
+        except ValueError:
+            response.close()
+            raise RuntimeError("The media host returned invalid file-size metadata.") from None
+        return response, safe_url
+    raise RuntimeError("The media host redirected too many times.")
+
+
+def _iter_direct_video_response(response):
+    try:
+        while True:
+            chunk = response.read(256 * 1024)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        response.close()
+
+
+def _direct_download_headers(response, final_url: str) -> tuple[dict[str, str], str]:
+    parsed = urllib.parse.urlsplit(final_url)
+    filename = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1]) or "video"
+    filename = re.sub(r"[\x00-\x1f\x7f\"\\/;]", "_", filename).strip(" .")[:180] or "video"
+    ascii_name = re.sub(r"[^A-Za-z0-9._ -]", "_", filename).strip(" .") or "video"
+    encoded_name = urllib.parse.quote(filename, safe="")
+    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    media_type = content_type if content_type.startswith("video/") or content_type == "application/octet-stream" else "application/octet-stream"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+    }
+    for name in ("Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"):
+        value = response.headers.get(name)
+        if value:
+            headers[name] = value
+    return headers, media_type
+
+
 @app.get("/api/video-download", include_in_schema=False)
-async def video_download(url: str = Query(..., min_length=4, max_length=2048)):
+async def video_download(request: Request, url: str = Query(..., min_length=4, max_length=2048)):
     """Download one selected video through yt-dlp; never scrape a page for unrelated videos."""
     candidate = url.strip()
     if "://" not in candidate:
@@ -1215,7 +1372,21 @@ async def video_download(url: str = Query(..., min_length=4, max_length=2048)):
 
     direct_ext = Path(urlparse(normalized).path).suffix.lower()
     if direct_ext in _VIDEO_EXTENSIONS:
-        return RedirectResponse(normalized, status_code=302)
+        try:
+            upstream, final_url = await asyncio.to_thread(
+                _open_direct_video_response, normalized, request.headers.get("range")
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from None
+        headers, media_type = _direct_download_headers(upstream, final_url)
+        return StreamingResponse(
+            _iter_direct_video_response(upstream),
+            status_code=getattr(upstream, "status", 200),
+            headers=headers,
+            media_type=media_type,
+        )
 
     if _host_is(urlparse(normalized).hostname or "", _TERABOX_HOSTS):
         try:
@@ -1246,13 +1417,9 @@ async def video_download(url: str = Query(..., min_length=4, max_length=2048)):
                 entries = [entry for entry in result["entries"] if entry]
                 if not entries:
                     raise RuntimeError("No video was downloaded.")
-            files = [
-                path for path in Path(temp_dir).iterdir()
-                if path.is_file() and path.stat().st_size > 10_000
-                and path.suffix.lower() not in {".part", ".ytdl", ".json", ".jpg", ".webp", ".png"}
-            ]
+            files = _completed_video_files(temp_dir)
             if not files:
-                raise RuntimeError("No completed video file was produced.")
+                raise RuntimeError("No completed video file was produced. The extractor may have returned only audio, subtitles, or an incomplete download.")
             return max(files, key=lambda path: path.stat().st_size)
         except Exception:
             shutil.rmtree(temp_dir, ignore_errors=True)

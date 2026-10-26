@@ -33,16 +33,44 @@ def test_direct_video_url_uses_fast_path_without_running_extractor():
     gallery.assert_not_called()
 
 
-def test_direct_download_redirects_to_validated_media_url():
+def test_direct_download_streams_as_attachment_and_preserves_range_headers():
     url = "https://cdn.example.org/media/clip.webm"
-    with patch("main._assert_public_video_url", return_value=url):
+
+    class FakeResponse:
+        status = 206
+        headers = {
+            "Content-Type": "video/webm",
+            "Content-Length": "4",
+            "Content-Range": "bytes 0-3/100",
+            "Accept-Ranges": "bytes",
+        }
+        closed = False
+
+        def __init__(self):
+            self.chunks = [b"data", b""]
+
+        def read(self, size=-1):
+            return self.chunks.pop(0)
+
+        def close(self):
+            self.closed = True
+
+    upstream = FakeResponse()
+    with patch("main._assert_public_video_url", return_value=url), \
+         patch("main._open_direct_video_response", return_value=(upstream, url)) as open_media:
         response = client.get(
             "/api/video-download",
             params={"url": url},
-            follow_redirects=False,
+            headers={"Range": "bytes=0-3"},
         )
-    assert response.status_code == 302
-    assert response.headers["location"] == url
+
+    assert response.status_code == 206
+    assert response.content == b"data"
+    assert "attachment" in response.headers["content-disposition"]
+    assert response.headers["content-range"] == "bytes 0-3/100"
+    assert response.headers["accept-ranges"] == "bytes"
+    assert upstream.closed
+    open_media.assert_called_once_with(url, "bytes=0-3")
 
 
 def test_page_extraction_uses_ytdlp_metadata_and_does_not_expose_expiring_stream():
@@ -130,6 +158,67 @@ def test_video_scanner_reports_public_media_candidates_without_fetching_private_
     assert scripts == []
     assert styles == []
     assert pages == []
+
+
+def test_quick_html_fallback_finds_explicit_media_when_site_extractor_is_missing():
+    page_url = "https://media.example.org/watch/clip"
+    source = b"""
+    <html><head><title>Test clip</title></head>
+    <body><video controls><source src="https://cdn.example.org/media/clip.mp4" type="video/mp4"></video></body></html>
+    """
+    with patch("main._safe_video_fetch", return_value=(page_url, "text/html", source, 200)), \
+         patch("main._assert_public_video_url", return_value="https://cdn.example.org/media/clip.mp4"):
+        result = main._quick_video_html_fallback(page_url)
+
+    assert result is not None
+    assert result["extractor"] == "HTML media fallback"
+    assert result["ext"] == "mp4"
+    assert result["download_url"].startswith("/api/video-download?url=")
+    assert result["preview_url"] == "https://cdn.example.org/media/clip.mp4"
+
+
+def test_completed_file_filter_excludes_subtitles_thumbnails_and_audio_only(tmp_path):
+    video = tmp_path / "clip.mp4"
+    subtitle = tmp_path / "captions.srt"
+    audio = tmp_path / "audio.m4a"
+    thumbnail = tmp_path / "cover.jpg"
+    for path in (video, subtitle, audio, thumbnail):
+        path.write_bytes(b"x" * 12000)
+
+    completed = main._completed_video_files(tmp_path)
+
+    assert completed == [video]
+
+
+def test_direct_download_revalidates_redirect_targets():
+    import urllib.error
+    from email.message import Message
+
+    url = "https://cdn.example.org/clip.mp4"
+    headers = Message()
+    headers["Location"] = "http://127.0.0.1/private.mp4"
+    redirect = urllib.error.HTTPError(url, 302, "Found", headers, None)
+
+    class FakeOpener:
+        calls = 0
+
+        def open(self, request, timeout=0):
+            self.calls += 1
+            raise redirect
+
+    opener = FakeOpener()
+    with patch("main.urllib.request.build_opener", return_value=opener), \
+         patch("main._assert_public_video_url", side_effect=lambda value: (
+             value if value == url else (_ for _ in ()).throw(ValueError("Private, local, or reserved network addresses are blocked."))
+         )):
+        try:
+            main._open_direct_video_response(url)
+        except ValueError as exc:
+            assert "Private" in str(exc)
+        else:
+            raise AssertionError("redirect to a private address must be rejected")
+
+    assert opener.calls == 1
 
 
 def test_media_signature_rejects_html_disguised_as_mp4():
