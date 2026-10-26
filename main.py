@@ -12,13 +12,17 @@ import math
 import operator
 import os
 import re
+import socket
+import urllib.error
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 from ddgs import DDGS
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from spellchecker import SpellChecker
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -428,3 +432,404 @@ async def osint(target: str = Query(..., min_length=1, max_length=253)) -> JSONR
         },
         "notice": "Passive public-source lookups only. No port scanning, crawling, login attempts, or access to private systems is performed. Data may be incomplete or delayed.",
     })
+
+
+# --- Video URL discovery: bounded public-page inspection, not a proxy/DRM bypass.
+VIDEO_TEMPLATE = BASE_DIR / "templates" / "video.html"
+VIDEO_EXT_RE = re.compile(r"\.(?:mp4|m4v|webm|mov|mkv|avi|flv|ogv|3gp|m3u8|mpd)$", re.I)
+VIDEO_URL_RE = re.compile(
+    r"""(?P<url>(?:https?:)?//[^\s"'<>\\)]+?\.(?:mp4|m4v|webm|mov|mkv|avi|flv|ogv|3gp|m3u8|mpd)(?:[?#][^\s"'<>\\)]*)?|(?:\.\.?/|/)?[A-Za-z0-9_~!$&()+,;=:@%./-]{1,900}\.(?:mp4|m4v|webm|mov|mkv|avi|flv|ogv|3gp|m3u8|mpd)(?:[?#][^\s"'<>\\)]*)?)""",
+    re.IGNORECASE,
+)
+VIDEO_CONTENT_TYPES = {
+    "video/mp4": "MP4 video", "video/webm": "WebM video",
+    "video/quicktime": "QuickTime video", "video/x-matroska": "Matroska video",
+    "video/x-msvideo": "AVI video", "video/x-flv": "Flash video",
+    "video/ogg": "Ogg video", "video/3gpp": "3GPP video",
+    "application/vnd.apple.mpegurl": "HLS stream playlist",
+    "application/x-mpegurl": "HLS stream playlist",
+    "application/dash+xml": "MPEG-DASH stream manifest",
+}
+MAX_VIDEO_HTML_BYTES = 1_500_000
+MAX_VIDEO_ASSET_BYTES = 900_000
+MAX_VIDEO_PAGES = 5
+MAX_VIDEO_SCRIPTS = 8
+MAX_VIDEO_STYLES = 5
+MAX_VIDEO_ITEMS = 40
+MAX_VIDEO_HEAD_PROBES = 12
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        return None
+
+
+class _VideoPageParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.media_urls = []
+        self.script_urls = []
+        self.style_urls = []
+        self.page_urls = []
+        self.inline_scripts = []
+        self.inline_styles = []
+        self.title_parts = []
+        self.capture = None
+        self.buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        values = {key.lower(): (value or "") for key, value in attrs if key}
+        if tag in {"video", "source", "audio", "track", "embed"}:
+            for key in ("src", "data-src", "data-video", "data-url", "data-file", "file", "href"):
+                if values.get(key):
+                    self.media_urls.append(values[key])
+        else:
+            for key in ("data-video", "data-file", "data-media"):
+                if values.get(key):
+                    self.media_urls.append(values[key])
+        if tag == "script":
+            if values.get("src"):
+                self.script_urls.append(values["src"])
+            else:
+                self.capture, self.buffer = "script", []
+        elif tag == "style":
+            self.capture, self.buffer = "style", []
+        elif tag == "title":
+            self.capture, self.buffer = "title", []
+        if tag == "link" and "stylesheet" in values.get("rel", "").lower().split() and values.get("href"):
+            self.style_urls.append(values["href"])
+        if tag == "a" and values.get("href"):
+            self.page_urls.append(values["href"])
+
+    def handle_data(self, data):
+        if self.capture:
+            self.buffer.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == self.capture:
+            value = "".join(self.buffer)
+            if value.strip():
+                if self.capture == "script":
+                    self.inline_scripts.append(value)
+                elif self.capture == "style":
+                    self.inline_styles.append(value)
+                elif self.capture == "title":
+                    self.title_parts.append(value.strip())
+            self.capture, self.buffer = None, []
+
+
+def _assert_public_video_url(value):
+    """Reject private/local destinations before requests and re-check redirects."""
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        scheme, hostname, port = parsed.scheme.lower(), parsed.hostname, parsed.port
+    except ValueError:
+        raise ValueError("Enter a valid public HTTP or HTTPS URL.") from None
+    if scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
+        raise ValueError("Only public HTTP and HTTPS URLs are supported.")
+    if hostname.lower().endswith(".onion") or "%" in hostname:
+        raise ValueError("Onion, scoped, and non-public hostnames are not fetched.")
+    allowed_port = 443 if scheme == "https" else 80
+    if port is not None and port != allowed_port:
+        raise ValueError("Only standard HTTP and HTTPS ports are supported.")
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            answers = socket.getaddrinfo(hostname, port or allowed_port, type=socket.SOCK_STREAM)
+            addresses = [ipaddress.ip_address(answer[4][0].split("%", 1)[0]) for answer in answers]
+        except (OSError, ValueError):
+            raise ValueError("The host could not be resolved to a public address.") from None
+    if not addresses or any(not address.is_global for address in addresses):
+        raise ValueError("Private, local, or reserved network addresses are blocked.")
+    return urllib.parse.urlunsplit((scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
+
+
+def _safe_video_fetch(value, max_bytes=MAX_VIDEO_HTML_BYTES, method="GET"):
+    current = value
+    opener = urllib.request.build_opener(_NoRedirect())
+    for _ in range(4):
+        _assert_public_video_url(current)
+        request = urllib.request.Request(
+            current,
+            headers={
+                "User-Agent": "OpenFind-VideoScout/1.0 (+https://github.com/DilipDC/openfind)",
+                "Accept": "text/html,text/css,application/javascript,application/json,video/*,application/vnd.apple.mpegurl,application/dash+xml,*/*;q=0.4",
+            },
+            method=method,
+        )
+        try:
+            with opener.open(request, timeout=6.0) as response:
+                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                body = response.read(max_bytes + 1) if method != "HEAD" else b""
+                return response.geturl(), content_type, body[:max_bytes], response.status
+        except urllib.error.HTTPError as exc:
+            location = exc.headers.get("Location", "")
+            if exc.code in {301, 302, 303, 307, 308} and location:
+                current = urllib.parse.urljoin(current, location)
+                if exc.code == 303:
+                    method = "GET"
+                continue
+            return current, exc.headers.get("Content-Type", "").split(";", 1)[0].strip().lower(), b"", exc.code
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            raise RuntimeError("The page or asset could not be fetched.") from exc
+    raise RuntimeError("Too many redirects.")
+
+
+def _video_kind(value, content_type=""):
+    path = urllib.parse.urlsplit(value).path.lower()
+    if VIDEO_EXT_RE.search(path):
+        extension = path.rsplit(".", 1)[-1]
+        return {
+            "mp4": "MP4 video", "m4v": "M4V video", "webm": "WebM video",
+            "mov": "QuickTime video", "mkv": "Matroska video", "avi": "AVI video",
+            "flv": "Flash video", "ogv": "Ogg video", "3gp": "3GPP video",
+            "m3u8": "HLS stream playlist", "mpd": "MPEG-DASH stream manifest",
+        }.get(extension)
+    return VIDEO_CONTENT_TYPES.get(content_type.lower())
+
+
+def _resolve_video_url(raw, base_url):
+    if not isinstance(raw, str) or len(raw) > 4096:
+        return None
+    value = unescape(raw).strip().strip("\\"'").replace("\\\\/", "/")
+    value = value.replace("\\\\u0026", "&").replace("\\\\x26", "&")
+    if not value or value.startswith(("#", "data:", "blob:", "javascript:", "mailto:")):
+        return None
+    try:
+        absolute = urllib.parse.urljoin(base_url, value)
+        parsed = urllib.parse.urlsplit(absolute)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc, parsed.path or "/", parsed.query, ""))
+
+
+def _same_video_origin(left, right):
+    try:
+        a, b = urllib.parse.urlsplit(left), urllib.parse.urlsplit(right)
+        ap = a.port or (443 if a.scheme == "https" else 80)
+        bp = b.port or (443 if b.scheme == "https" else 80)
+        return a.scheme == b.scheme and (a.hostname or "").lower() == (b.hostname or "").lower() and ap == bp
+    except ValueError:
+        return False
+
+
+def _video_candidates(source, base_url):
+    normalized = unescape(source or "").replace("\\\\/", "/").replace("\\\\u0026", "&")
+    found = []
+    for match in VIDEO_URL_RE.finditer(normalized):
+        value = _resolve_video_url(match.group("url"), base_url)
+        if value:
+            found.append(value)
+        if len(found) >= MAX_VIDEO_ITEMS:
+            break
+    return list(dict.fromkeys(found))
+
+
+def _parse_video_html(source, base_url):
+    parser = _VideoPageParser()
+    parser.feed(source)
+    scripts = [_resolve_video_url(value, base_url) for value in parser.script_urls]
+    styles = [_resolve_video_url(value, base_url) for value in parser.style_urls]
+    pages = [_resolve_video_url(value, base_url) for value in parser.page_urls]
+    scripts = list(dict.fromkeys(value for value in scripts if value))[:MAX_VIDEO_SCRIPTS]
+    styles = list(dict.fromkeys(value for value in styles if value))[:MAX_VIDEO_STYLES]
+    pages = list(dict.fromkeys(value for value in pages if value and _same_video_origin(value, base_url) and value != base_url))
+    pages.sort(key=lambda value: 0 if re.search(r"(video|watch|media|movie|player|clip|stream|episode|embed)", urllib.parse.urlsplit(value).path, re.I) else 1)
+    return parser, scripts, styles, pages[:MAX_VIDEO_PAGES - 1]
+
+
+def _video_item(value, kind):
+    parsed = urllib.parse.urlsplit(value)
+    filename = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1]) or "video"
+    return {
+        "url": value, "title": filename[:160], "kind": kind,
+        "host": parsed.hostname or "",
+        "extension": "." + parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path.rsplit("/", 1)[-1] else "",
+        "stream": "true" if kind in {"HLS stream playlist", "MPEG-DASH stream manifest"} else "false",
+    }
+
+
+async def _video_scan_stream(target):
+    found, checked = {}, set()
+    head_probes = 0
+    request_count = 0
+    pages_scanned = scripts_scanned = styles_scanned = 0
+
+    def line(payload):
+        return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+    def progress(percent, message):
+        return line({"type": "progress", "percent": max(0, min(100, percent)), "message": message})
+
+    async def add_media(raw, base, explicit=False):
+        nonlocal head_probes, request_count
+        value = _resolve_video_url(raw, base)
+        if not value or value in checked or len(found) >= MAX_VIDEO_ITEMS:
+            return None
+        checked.add(value)
+        kind = _video_kind(value)
+        if not kind and explicit and head_probes < MAX_VIDEO_HEAD_PROBES:
+            head_probes += 1
+            request_count += 1
+            try:
+                final_url, content_type, _, status = await asyncio.to_thread(_safe_video_fetch, value, 0, "HEAD")
+                kind, value = _video_kind(final_url, content_type), final_url
+                if not kind and status in {405, 501}:
+                    final_url, content_type, _, status = await asyncio.to_thread(_safe_video_fetch, value, 512, "GET")
+                    kind, value = _video_kind(final_url, content_type), final_url
+            except (RuntimeError, ValueError):
+                return None
+        if not kind:
+            return None
+        try:
+            await asyncio.to_thread(_assert_public_video_url, value)
+        except ValueError:
+            return None
+        item = _video_item(value, kind)
+        if value not in found:
+            found[value] = item
+            return item
+        return None
+
+    yield progress(3, "Validating the public URL")
+    try:
+        direct_kind = _video_kind(target)
+        if direct_kind:
+            item = await add_media(target, target, explicit=True)
+            if item:
+                yield line({"type": "video", "video": item})
+            yield progress(100, "Direct media URL checked")
+            yield line({"type": "done", "videos": list(found.values()), "stats": {"pages": 0, "scripts": 0, "stylesheets": 0, "requests": request_count}, "message": f"Found {len(found)} video URL(s)."})
+            return
+
+        # Probe headers first so direct, extensionless media is not read into memory.
+        request_count += 1
+        head_url, head_type, _, head_status = await asyncio.to_thread(_safe_video_fetch, target, 0, "HEAD")
+        root_kind = _video_kind(head_url, head_type)
+        if root_kind and head_status < 400:
+            item = await add_media(head_url, head_url, explicit=True)
+            if item:
+                yield line({"type": "video", "video": item})
+            yield progress(100, "Direct media response checked")
+            yield line({"type": "done", "videos": list(found.values()), "stats": {"pages": 0, "scripts": 0, "stylesheets": 0, "requests": request_count}, "message": f"Found {len(found)} video URL(s)."})
+            return
+
+        request_count += 1
+        final_url, content_type, body, status = await asyncio.to_thread(_safe_video_fetch, target, MAX_VIDEO_HTML_BYTES, "GET")
+        if status >= 400:
+            yield line({"type": "error", "message": f"The page returned HTTP {status}. It may require login or deny automated requests."})
+            return
+        if _video_kind(final_url, content_type):
+            item = await add_media(final_url, final_url, explicit=True)
+            if item:
+                yield line({"type": "video", "video": item})
+            yield progress(100, "Direct media response checked")
+            yield line({"type": "done", "videos": list(found.values()), "stats": {"pages": 1, "scripts": 0, "stylesheets": 0, "requests": request_count}, "message": f"Found {len(found)} video URL(s)."})
+            return
+
+        source = body.decode("utf-8", errors="replace")
+        yield progress(10, "Parsing the first page: HTML and embedded player data")
+        parser, script_urls, style_urls, page_urls = _parse_video_html(source, final_url)
+        pages_scanned = 1
+        page_title = " ".join(parser.title_parts).strip()[:180]
+        for raw in parser.media_urls + _video_candidates(source, final_url):
+            item = await add_media(raw, final_url, explicit=True)
+            if item:
+                yield line({"type": "video", "video": item})
+        for blob in parser.inline_scripts + parser.inline_styles:
+            for raw in _video_candidates(blob, final_url):
+                item = await add_media(raw, final_url)
+                if item:
+                    yield line({"type": "video", "video": item})
+
+        page_total = len(page_urls)
+        for index, page_url in enumerate(page_urls, start=1):
+            try:
+                request_count += 1
+                child_url, child_type, child_body, child_status = await asyncio.to_thread(_safe_video_fetch, page_url, MAX_VIDEO_HTML_BYTES, "GET")
+                if child_status < 400 and "html" in child_type:
+                    child_source = child_body.decode("utf-8", errors="replace")
+                    child_parser, child_scripts, child_styles, _ = _parse_video_html(child_source, child_url)
+                    pages_scanned += 1
+                    script_urls = list(dict.fromkeys(script_urls + child_scripts))[:MAX_VIDEO_SCRIPTS]
+                    style_urls = list(dict.fromkeys(style_urls + child_styles))[:MAX_VIDEO_STYLES]
+                    for raw in child_parser.media_urls + _video_candidates(child_source, child_url):
+                        item = await add_media(raw, child_url, explicit=True)
+                        if item:
+                            yield line({"type": "video", "video": item})
+                    for blob in child_parser.inline_scripts + child_parser.inline_styles:
+                        for raw in _video_candidates(blob, child_url):
+                            item = await add_media(raw, child_url)
+                            if item:
+                                yield line({"type": "video", "video": item})
+            except (RuntimeError, ValueError):
+                pass
+            yield progress(10 + int(index / max(page_total, 1) * 30), f"Scanned subpage {index}/{page_total}")
+
+        script_total = len(script_urls)
+        for index, script_url in enumerate(script_urls, start=1):
+            try:
+                request_count += 1
+                _, _, script_body, script_status = await asyncio.to_thread(_safe_video_fetch, script_url, MAX_VIDEO_ASSET_BYTES, "GET")
+                if script_status < 400:
+                    scripts_scanned += 1
+                    for raw in _video_candidates(script_body.decode("utf-8", errors="replace"), script_url):
+                        item = await add_media(raw, script_url)
+                        if item:
+                            yield line({"type": "video", "video": item})
+            except (RuntimeError, ValueError):
+                pass
+            yield progress(40 + int(index / max(script_total, 1) * 40), f"Scanned JavaScript {index}/{script_total}")
+
+        style_total = len(style_urls)
+        for index, style_url in enumerate(style_urls, start=1):
+            try:
+                request_count += 1
+                _, _, style_body, style_status = await asyncio.to_thread(_safe_video_fetch, style_url, MAX_VIDEO_ASSET_BYTES, "GET")
+                if style_status < 400:
+                    styles_scanned += 1
+                    for raw in _video_candidates(style_body.decode("utf-8", errors="replace"), style_url):
+                        item = await add_media(raw, style_url)
+                        if item:
+                            yield line({"type": "video", "video": item})
+            except (RuntimeError, ValueError):
+                pass
+            yield progress(80 + int(index / max(style_total, 1) * 15), f"Scanned CSS {index}/{style_total}")
+
+        yield progress(100, "Scan finished")
+        message = f"Found {len(found)} candidate video URL(s)." if found else "No directly exposed video URLs found. Some players load media only at runtime or require login."
+        yield line({
+            "type": "done", "videos": list(found.values()),
+            "stats": {"pages": pages_scanned, "scripts": scripts_scanned, "stylesheets": styles_scanned, "requests": request_count},
+            "page_title": page_title, "message": message,
+        })
+    except (RuntimeError, ValueError) as exc:
+        message = str(exc) if isinstance(exc, ValueError) else "Could not fetch that public page. Check the URL and try again."
+        yield line({"type": "error", "message": message})
+
+
+@app.get("/video", include_in_schema=False)
+async def video_finder() -> FileResponse:
+    if not VIDEO_TEMPLATE.is_file():
+        raise HTTPException(status_code=500, detail="Video finder page is missing.")
+    return FileResponse(VIDEO_TEMPLATE, media_type="text/html; charset=utf-8")
+
+
+@app.get("/api/video-scan", include_in_schema=False)
+async def video_scan(url: str = Query(..., min_length=4, max_length=2048)) -> StreamingResponse:
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = "https://" + candidate
+    try:
+        normalized = _assert_public_video_url(candidate)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return StreamingResponse(
+        _video_scan_stream(normalized),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
