@@ -103,8 +103,8 @@ def test_searxng_result_normalization():
 def test_video_finder_route():
     response = client.get("/video")
     assert response.status_code == 200
-    assert "Video Scout" in response.text
-    assert "JavaScript" in response.text
+    assert "Video downloader" in response.text
+    assert "Download video" in response.text
 
 
 def test_video_parser_discovers_media_scripts_styles_and_subpages():
