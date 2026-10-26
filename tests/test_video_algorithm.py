@@ -160,6 +160,23 @@ def test_video_scanner_reports_public_media_candidates_without_fetching_private_
     assert pages == []
 
 
+def test_quick_html_fallback_finds_explicit_media_when_site_extractor_is_missing():
+    page_url = "https://media.example.org/watch/clip"
+    source = b"""
+    <html><head><title>Test clip</title></head>
+    <body><video controls><source src="https://cdn.example.org/media/clip.mp4" type="video/mp4"></video></body></html>
+    """
+    with patch("main._safe_video_fetch", return_value=(page_url, "text/html", source, 200)), \
+         patch("main._assert_public_video_url", return_value="https://cdn.example.org/media/clip.mp4"):
+        result = main._quick_video_html_fallback(page_url)
+
+    assert result is not None
+    assert result["extractor"] == "HTML media fallback"
+    assert result["ext"] == "mp4"
+    assert result["download_url"].startswith("/api/video-download?url=")
+    assert result["preview_url"] == "https://cdn.example.org/media/clip.mp4"
+
+
 def test_completed_file_filter_excludes_subtitles_thumbnails_and_audio_only(tmp_path):
     video = tmp_path / "clip.mp4"
     subtitle = tmp_path / "captions.srt"
