@@ -936,7 +936,7 @@ async def video_info(url: str = Query(..., min_length=4, max_length=4096)) -> di
 
 @app.get("/api/video-resolve", include_in_schema=False)
 async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) -> dict[str, Any]:
-    """Resolve a single public video page using yt-dlp supported extractors."""
+    """Resolve one actual public video and reject thumbnails, manifests, and non-video responses."""
     candidate = url.strip()
     if "://" not in candidate:
         candidate = "https://" + candidate
@@ -945,61 +945,129 @@ async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) ->
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    def probe_media(media_url: str) -> tuple[bool, str | None, int | None]:
+        # Confirm this is a real media response, not a thumbnail, login page, or tiny placeholder.
+        try:
+            safe_media_url = _assert_public_video_url(media_url)
+            request = urllib.request.Request(
+                safe_media_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; OpenFind/1.0)",
+                    "Range": "bytes=0-4095",
+                    "Accept": "video/*,application/octet-stream;q=0.8,*/*;q=0.2",
+                },
+            )
+            with urllib.request.build_opener(_NoRedirect()).open(request, timeout=7) as response:
+                content_type = (response.headers.get("Content-Type") or "").split(";")[0].lower()
+                content_range = response.headers.get("Content-Range") or ""
+                length_header = response.headers.get("Content-Length")
+                size = None
+                match = re.search(r"/(\d+)$", content_range)
+                if match:
+                    size = int(match.group(1))
+                elif length_header and response.status == 200:
+                    size = int(length_header)
+                body = response.read(4096)
+            if size is not None and size < 10_000:
+                return False, content_type, size
+            if content_type.startswith("image/") or content_type in {
+                "text/html", "application/json", "text/plain", "application/xml"
+            }:
+                return False, content_type, size
+            signature_ok = (
+                (len(body) >= 8 and body[4:8] == b"ftyp")
+                or body.startswith(b"\x1a\x45\xdf\xa3")
+                or (body.startswith(b"RIFF") and len(body) >= 12 and body[8:12] == b"AVI ")
+                or body.startswith(b"FLV")
+                or body.startswith(b"OggS")
+                or content_type.startswith("video/")
+                or content_type == "application/octet-stream"
+            )
+            return bool(signature_ok and body), content_type, size
+        except Exception:
+            return False, None, None
+
     def extract():
         try:
             import yt_dlp
         except ImportError as exc:
-            raise RuntimeError("Video extractor is not installed yet. Please retry after deployment.") from exc
+            raise RuntimeError("The video extractor is not installed yet; retry after deployment.") from exc
         options = {
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
             "skip_download": True,
-            "socket_timeout": 12,
+            "socket_timeout": 10,
             "extractor_retries": 1,
             "retries": 1,
-            "format": "best[ext=mp4]/best",
+            "format": "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
             "http_headers": {"User-Agent": "Mozilla/5.0 (compatible; OpenFind/1.0)"},
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(normalized, download=False)
         if not info:
-            raise RuntimeError("No downloadable video was found on that page.")
+            raise RuntimeError("No video found.")
         if info.get("entries"):
-            info = next((entry for entry in info["entries"] if entry), None)
-        if not info:
-            raise RuntimeError("No single video was found. Playlist pages are not supported.")
+            entries = [entry for entry in info["entries"] if entry]
+            if not entries:
+                raise RuntimeError("No single video found on this page.")
+            info = entries[0]
+        formats = info.get("formats") or []
+        # Prefer complete audio+video formats. Reject image thumbnails, audio-only streams and manifests.
+        candidates = []
         requested = info.get("requested_downloads") or []
-        formats = requested or [info]
-        chosen = next((item for item in formats if item.get("url")), None)
+        if requested:
+            candidates.extend(requested)
+        candidates.extend(sorted(formats, key=lambda item: (
+            item.get("ext") == "mp4",
+            item.get("acodec") not in (None, "none"),
+            item.get("height") or 0,
+            item.get("filesize") or item.get("filesize_approx") or 0,
+        ), reverse=True))
+        candidates.append(info)
+        chosen = None
+        media_url = None
+        verified_type = None
+        actual_size = None
+        seen_urls = set()
+        for item in candidates:
+            item_url = item.get("url")
+            if not isinstance(item_url, str) or not item_url.startswith(("https://", "http://")):
+                continue
+            if item_url in seen_urls:
+                continue
+            seen_urls.add(item_url)
+            ext = str(item.get("ext") or "").lower()
+            protocol = str(item.get("protocol") or "").lower()
+            if ext in {"jpg", "jpeg", "png", "webp", "gif", "m3u8", "mpd"} or "m3u8" in protocol or "dash" in protocol:
+                continue
+            if item.get("vcodec") == "none":
+                continue
+            valid, ctype, probed_size = probe_media(item_url)
+            if valid:
+                chosen, media_url, verified_type, actual_size = item, item_url, ctype, probed_size
+                break
         if not chosen:
-            chosen = next((item for item in info.get("formats", []) if item.get("url") and item.get("vcodec") != "none"), None)
-        if not chosen:
-            raise RuntimeError("This page did not expose a downloadable video stream.")
-        media_url = chosen.get("url")
-        if not media_url or not media_url.startswith(("https://", "http://")):
-            raise RuntimeError("The source did not provide a public HTTP video stream.")
-        size = chosen.get("filesize") or chosen.get("filesize_approx")
+            raise RuntimeError("No verifiable direct video file was found. The site may block extraction or only expose a protected/segmented stream.")
+        size = actual_size or chosen.get("filesize") or chosen.get("filesize_approx")
         return {
             "title": _clean_text(info.get("title") or info.get("id") or "Video", 250),
             "webpage_url": normalized,
             "extractor": _clean_text(info.get("extractor_key") or info.get("extractor") or "Web", 100),
             "media_url": media_url,
-            "ext": _clean_text(chosen.get("ext") or info.get("ext") or "unknown", 20),
+            "ext": _clean_text(chosen.get("ext") or "unknown", 20),
             "size_bytes": size,
             "size": _format_bytes(int(size)) if size is not None else "Unknown",
+            "content_type": verified_type or "unknown",
             "duration": info.get("duration"),
-            "thumbnail": _safe_http_url(info.get("thumbnail")),
-            "note": "Direct stream link only. Some sites require cookies, signatures, or separate audio; protected or restricted content is not supported.",
+            "note": "Only a direct media response passed basic checks. Some sites use separate audio/video streams or protected playback and cannot be downloaded by this version.",
         }
     try:
-        result = await asyncio.to_thread(extract)
-        return result
+        return await asyncio.to_thread(extract)
     except HTTPException:
         raise
     except Exception as exc:
-        message = str(exc)
-        if "Video extractor is not installed" in message:
-            raise HTTPException(status_code=503, detail=message) from None
         logger.info("Video resolve unavailable: %s", type(exc).__name__)
-        raise HTTPException(status_code=422, detail="Could not find a downloadable public video. The site may require login, block extraction, or use a protected player.") from None
+        if "not installed yet" in str(exc):
+            raise HTTPException(status_code=503, detail="Video engine is starting. Please retry shortly.") from None
+        raise HTTPException(status_code=422, detail="No verified direct video was found for this link. This site may require login, block extraction, or use a protected/segmented player.") from None
