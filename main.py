@@ -1117,6 +1117,19 @@ async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) ->
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
+    direct_ext = Path(urlparse(normalized).path).suffix.lower()
+    if direct_ext in _VIDEO_EXTENSIONS:
+        filename = Path(urllib.parse.unquote(urlparse(normalized).path)).name or "video" + direct_ext
+        return {
+            "title": _clean_text(Path(filename).stem or "Video", 250),
+            "webpage_url": normalized, "extractor": "Direct media URL",
+            "ext": direct_ext.lstrip("."), "size_bytes": None, "size": "Unknown",
+            "duration": None, "thumbnail": None,
+            "download_url": "/api/video-download?url=" + urllib.parse.quote(normalized, safe=""),
+            "preview_url": normalized,
+            "note": "Direct video file URL.",
+        }
+
     if _host_is(urlparse(normalized).hostname or "", _TERABOX_HOSTS):
         try:
             metadata = await asyncio.to_thread(_terabox_video_info, normalized)
@@ -1199,6 +1212,10 @@ async def video_download(url: str = Query(..., min_length=4, max_length=2048)):
         normalized = _assert_public_video_url(candidate)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    direct_ext = Path(urlparse(normalized).path).suffix.lower()
+    if direct_ext in _VIDEO_EXTENSIONS:
+        return RedirectResponse(normalized, status_code=302)
 
     if _host_is(urlparse(normalized).hostname or "", _TERABOX_HOSTS):
         try:
