@@ -932,3 +932,74 @@ async def video_info(url: str = Query(..., min_length=4, max_length=4096)) -> di
         "tiny_file_warning": total_size is not None and total_size < 10_000,
         "note": "Size and format depend on what the public host exposes. A short or blocked response is not proof of a valid complete video.",
     }
+
+
+@app.get("/api/video-resolve", include_in_schema=False)
+async def video_resolve(url: str = Query(..., min_length=4, max_length=2048)) -> dict[str, Any]:
+    """Resolve a single public video page using yt-dlp supported extractors."""
+    candidate = url.strip()
+    if "://" not in candidate:
+        candidate = "https://" + candidate
+    try:
+        normalized = _assert_public_video_url(candidate)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    def extract():
+        try:
+            import yt_dlp
+        except ImportError as exc:
+            raise RuntimeError("Video extractor is not installed yet. Please retry after deployment.") from exc
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "skip_download": True,
+            "socket_timeout": 12,
+            "extractor_retries": 1,
+            "retries": 1,
+            "format": "best[ext=mp4]/best",
+            "http_headers": {"User-Agent": "Mozilla/5.0 (compatible; OpenFind/1.0)"},
+        }
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(normalized, download=False)
+        if not info:
+            raise RuntimeError("No downloadable video was found on that page.")
+        if info.get("entries"):
+            info = next((entry for entry in info["entries"] if entry), None)
+        if not info:
+            raise RuntimeError("No single video was found. Playlist pages are not supported.")
+        requested = info.get("requested_downloads") or []
+        formats = requested or [info]
+        chosen = next((item for item in formats if item.get("url")), None)
+        if not chosen:
+            chosen = next((item for item in info.get("formats", []) if item.get("url") and item.get("vcodec") != "none"), None)
+        if not chosen:
+            raise RuntimeError("This page did not expose a downloadable video stream.")
+        media_url = chosen.get("url")
+        if not media_url or not media_url.startswith(("https://", "http://")):
+            raise RuntimeError("The source did not provide a public HTTP video stream.")
+        size = chosen.get("filesize") or chosen.get("filesize_approx")
+        return {
+            "title": _clean_text(info.get("title") or info.get("id") or "Video", 250),
+            "webpage_url": normalized,
+            "extractor": _clean_text(info.get("extractor_key") or info.get("extractor") or "Web", 100),
+            "media_url": media_url,
+            "ext": _clean_text(chosen.get("ext") or info.get("ext") or "unknown", 20),
+            "size_bytes": size,
+            "size": _format_bytes(int(size)) if size is not None else "Unknown",
+            "duration": info.get("duration"),
+            "thumbnail": _safe_http_url(info.get("thumbnail")),
+            "note": "Direct stream link only. Some sites require cookies, signatures, or separate audio; protected or restricted content is not supported.",
+        }
+    try:
+        result = await asyncio.to_thread(extract)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        message = str(exc)
+        if "Video extractor is not installed" in message:
+            raise HTTPException(status_code=503, detail=message) from None
+        logger.info("Video resolve unavailable: %s", type(exc).__name__)
+        raise HTTPException(status_code=422, detail="Could not find a downloadable public video. The site may require login, block extraction, or use a protected player.") from None
