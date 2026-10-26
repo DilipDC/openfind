@@ -101,3 +101,16 @@ MIT. See LICENSE.
 - Optional SearXNG integration: set the SEARXNG_URL environment variable to an instance you operate or trust. It uses the instance JSON search API; if unavailable or disabled, search falls back to DDGS. Many SearXNG instances disable JSON by default. Docs: https://docs.searxng.org/dev/search_api.html
 
 Open-source components reused: DDGS (https://github.com/deedy5/ddgs), pyspellchecker (https://github.com/barrust/pyspellchecker), and the SearXNG HTTP API. OpenFind integrates their published library/API; it does not copy their code.
+
+
+
+## Video Scout
+
+Open the /video page from the OpenFind navigation to scan a public webpage for direct video URLs. The bounded scanner checks exposed HTML media attributes, embedded JavaScript, linked JavaScript/CSS, selected inline styles/scripts, and up to four same-origin subpages. It streams NDJSON events so found videos and scan progress appear as the scan runs.
+
+- Supported direct media extensions include MP4, M4V, WebM, MOV, MKV, AVI, FLV, OGV, and 3GP; HLS .m3u8 and MPEG-DASH .mpd manifests are labelled separately.
+- Video links open the discovered source directly; browser/server download behavior depends on the source site's headers and permissions. HLS/DASH manifests are not merged into a file.
+- The scan is intentionally capped by response size and counts of pages, scripts, stylesheets and results. It does not execute JavaScript, use logged-in cookies, crawl the whole site, bypass DRM, fetch onion sites, or access private/local addresses. Runtime-created blob URLs and login-gated players may not be detected.
+- Server-side scanning validates public DNS/IP addresses and re-validates every redirect. Public services should still use rate limits and abuse monitoring before scaling.
+
+The Video Scout is part of OpenFind and deploys with the existing Render web service when updates to main are pushed.
