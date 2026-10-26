@@ -73,6 +73,35 @@ def test_direct_download_streams_as_attachment_and_preserves_range_headers():
     open_media.assert_called_once_with(url, "bytes=0-3")
 
 
+def test_ytdlp_options_degrade_gracefully_without_ffmpeg():
+    with patch("main.Path.is_dir", return_value=False), \
+         patch("main.shutil.which", side_effect=lambda name: "/usr/bin/node" if name == "node" else None):
+        options = main._video_ydl_options(
+            skip_download=False,
+            output_template="/tmp/clip.%(ext)s",
+        )
+
+    assert options["format"] == "best[ext=mp4]/best"
+    assert options["js_runtimes"] == {"node": {}}
+    assert "merge_output_format" not in options
+    assert "recodevideo" not in options
+    assert options["outtmpl"] == "/tmp/clip.%(ext)s"
+
+
+def test_ytdlp_options_enable_stream_merging_when_ffmpeg_exists():
+    with patch("main.Path.is_dir", return_value=False), \
+         patch("main.shutil.which", side_effect=lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None):
+        options = main._video_ydl_options(
+            skip_download=False,
+            output_template="/tmp/clip.%(ext)s",
+        )
+
+    assert options["format"] == "bv*+ba/b"
+    assert options["merge_output_format"] == "mp4"
+    assert options["recodevideo"] == "mp4"
+    assert "js_runtimes" not in options
+
+
 def test_page_extraction_uses_ytdlp_metadata_and_does_not_expose_expiring_stream():
     url = "https://video.example.org/watch/123"
     fake_info = {
