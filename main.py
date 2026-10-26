@@ -593,8 +593,8 @@ def _video_kind(value, content_type=""):
 def _resolve_video_url(raw, base_url):
     if not isinstance(raw, str) or len(raw) > 4096:
         return None
-    value = unescape(raw).strip().strip("\\"'").replace("\\\\/", "/")
-    value = value.replace("\\\\u0026", "&").replace("\\\\x26", "&")
+    value = unescape(raw).strip().strip("\"'").replace("\\/", "/")
+    value = value.replace("\\u0026", "&").replace("\\x26", "&")
     if not value or value.startswith(("#", "data:", "blob:", "javascript:", "mailto:")):
         return None
     try:
@@ -618,7 +618,7 @@ def _same_video_origin(left, right):
 
 
 def _video_candidates(source, base_url):
-    normalized = unescape(source or "").replace("\\\\/", "/").replace("\\\\u0026", "&")
+    normalized = unescape(source or "").replace("\\/", "/").replace("\\u0026", "&")
     found = []
     for match in VIDEO_URL_RE.finditer(normalized):
         value = _resolve_video_url(match.group("url"), base_url)
